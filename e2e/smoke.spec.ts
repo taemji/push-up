@@ -10,13 +10,17 @@ test("home page loads", async ({ page }) => {
   await expect(page.getByText("100")).toBeVisible();
 });
 
-test("page scrolls to the cumulative pushup chart", async ({ page }) => {
+test("page shows the cumulative chart between the calendar and start button", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 667 });
   await page.goto("/");
 
-  await page.getByText("누적 푸시업").scrollIntoViewIfNeeded();
+  const cumulativeChart = page.getByLabel("누적기록 차트");
+  await cumulativeChart.scrollIntoViewIfNeeded();
 
-  await expect(page.getByText("누적 푸시업")).toBeVisible();
+  await expect(cumulativeChart).toBeVisible();
+  await expect(cumulativeChart.getByText("민지")).toBeVisible();
+  await expect(cumulativeChart.getByText("주영")).toBeVisible();
+  await expect(cumulativeChart.getByText("동훈")).toBeVisible();
   await expect(page.getByRole("button", { name: /시작하기/ })).toBeVisible();
 });
 

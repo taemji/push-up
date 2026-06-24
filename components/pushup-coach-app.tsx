@@ -668,34 +668,26 @@ export function PushupCoachApp() {
                     )}
                   </div>
 
-                  <div className="rounded-2xl bg-[var(--coach-surface)] p-4">
+                  <div className="rounded-2xl bg-[var(--coach-surface)] p-4" aria-label="누적기록 차트">
                     <div className="mb-4 flex items-center justify-between">
-                      <p className="text-sm font-semibold text-[var(--coach-ink)]">누적 푸시업</p>
+                      <p className="text-sm font-semibold text-[var(--coach-ink)]">누적기록 차트</p>
                       <p className="text-xs text-muted-foreground">
                         {userTotalsStatus === "loading" ? "불러오는 중" : "전체"}
                       </p>
                     </div>
-                    <div className="grid grid-cols-3 gap-3 text-center">
+                    <div className="flex flex-col gap-3">
                       {PUSHUP_USERS.map((user) => {
                         const userTotal = userTotalById.get(user.id);
                         const totalReps = userTotal?.totalReps ?? 0;
-                        const totalProgress = totalReps > 0 ? Math.max(4, Math.round((totalReps / maxUserTotalReps) * 100)) : 0;
+                        const totalProgress = Math.round((totalReps / maxUserTotalReps) * 100);
 
                         return (
-                          <div key={user.id} className="flex min-w-0 flex-col items-center gap-2">
-                            <div
-                              className="total-ring grid size-20 place-items-center rounded-full"
-                              style={{ "--progress": `${totalProgress}%` } as React.CSSProperties}
-                              aria-label={`${user.name} 누적 ${totalReps}개`}
-                            >
-                              <div className="grid size-[72%] place-items-center rounded-full bg-[var(--coach-surface)]">
-                                <span className="text-base font-semibold text-[var(--coach-ink)]">{totalReps}</span>
-                              </div>
+                          <div key={user.id} className="grid grid-cols-[3.25rem_1fr_3rem] items-center gap-2">
+                            <p className="truncate text-sm font-semibold text-[var(--coach-ink)]">{user.name}</p>
+                            <div className="h-4 overflow-hidden rounded-full bg-[var(--coach-panel)]" aria-label={`${user.name} 누적 ${totalReps}개`}>
+                              <div className="h-full rounded-full bg-[var(--coach-accent)]" style={{ width: `${totalProgress}%` }} />
                             </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-[var(--coach-ink)]">{user.name}</p>
-                              <p className="text-xs text-muted-foreground">누적</p>
-                            </div>
+                            <p className="text-right text-sm font-semibold text-[var(--coach-ink)]">{totalReps}</p>
                           </div>
                         );
                       })}
