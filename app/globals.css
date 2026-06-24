@@ -191,6 +191,15 @@
     box-shadow: 0 1px 0 color-mix(in srgb, white 70%, transparent) inset, 0 18px 42px color-mix(in srgb, var(--coach-ink) 6%, transparent);
   }
 
+  .coach-card [data-slot="field"]:not([data-invalid="true"]) [data-slot="field-label"],
+  .coach-card [data-slot="field"]:not([data-invalid="true"]) [data-slot="input"] {
+    color: var(--coach-ink);
+  }
+
+  .coach-card [data-slot="input"] {
+    caret-color: var(--coach-accent);
+  }
+
   .progress-ring {
     background: conic-gradient(var(--coach-accent) var(--progress), var(--coach-surface) 0);
   }
