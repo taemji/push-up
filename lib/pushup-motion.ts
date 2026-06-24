@@ -1,80 +1,71 @@
 export type MotionStage = "steady" | "descending" | "bottom" | "rising";
-export type PushupMotionState = "standing" | "down" | "bottom" | "rising";
+export type PushupMotionState = "top" | "down";
 
-const PUSHUP_START_TILT_DELTA = 9;
-const MIN_PUSHUP_DEPTH_TILT_DELTA = 20;
-const DEFAULT_PUSHUP_DEPTH_TILT_DELTA = 23;
-const PERSONAL_DEPTH_RATIO = 0.82;
-const PUSHUP_RISE_RATIO = 0.58;
-const PUSHUP_TOP_TILT_DELTA = 7;
+const DOWN_FACE_SCALE = 1.32;
+const TOP_FACE_SCALE = 1.12;
+const BASELINE_SMOOTHING = 0.05;
 
 export interface PushupMotionProfile {
-  targetDepthTiltDelta: number;
-  deepestTiltDelta: number;
+  baselineFaceArea: number | null;
+  peakFaceScale: number;
 }
 
 export interface PushupMotionResult {
   state: PushupMotionState;
   stage: MotionStage;
   completedRep: boolean;
+  faceScale: number;
   profile: PushupMotionProfile;
 }
 
 export function createPushupMotionProfile(): PushupMotionProfile {
   return {
-    targetDepthTiltDelta: DEFAULT_PUSHUP_DEPTH_TILT_DELTA,
-    deepestTiltDelta: 0,
+    baselineFaceArea: null,
+    peakFaceScale: 1,
   };
 }
 
 export function evaluatePushupMotion(
   currentState: PushupMotionState,
-  tiltDelta: number,
+  faceArea: number,
   profile: PushupMotionProfile = createPushupMotionProfile()
 ): PushupMotionResult {
-  const deepestTiltDelta = Math.max(profile.deepestTiltDelta, tiltDelta);
-  const targetDepthTiltDelta = Math.max(
-    MIN_PUSHUP_DEPTH_TILT_DELTA,
-    Math.min(DEFAULT_PUSHUP_DEPTH_TILT_DELTA, deepestTiltDelta * PERSONAL_DEPTH_RATIO)
-  );
-  const riseTiltDelta = Math.max(PUSHUP_TOP_TILT_DELTA + 2, targetDepthTiltDelta * PUSHUP_RISE_RATIO);
-  const nextProfile = { targetDepthTiltDelta, deepestTiltDelta };
+  if (faceArea <= 0) {
+    return { state: currentState, stage: "steady", completedRep: false, faceScale: 1, profile };
+  }
 
-  if (currentState === "standing") {
-    if (tiltDelta >= PUSHUP_START_TILT_DELTA) {
-      return { state: "down", stage: "descending", completedRep: false, profile: nextProfile };
+  const baselineFaceArea = profile.baselineFaceArea === null
+    ? faceArea
+    : currentState === "top"
+      ? profile.baselineFaceArea * (1 - BASELINE_SMOOTHING) + faceArea * BASELINE_SMOOTHING
+      : profile.baselineFaceArea;
+  const faceScale = faceArea / baselineFaceArea;
+  const peakFaceScale = currentState === "down" ? Math.max(profile.peakFaceScale, faceScale) : Math.max(1, faceScale);
+  const nextProfile = { baselineFaceArea, peakFaceScale };
+
+  if (currentState === "top") {
+    if (faceScale >= DOWN_FACE_SCALE) {
+      return { state: "down", stage: "bottom", completedRep: false, faceScale, profile: nextProfile };
     }
 
-    return { state: "standing", stage: "steady", completedRep: false, profile: nextProfile };
+    return {
+      state: "top",
+      stage: faceScale > TOP_FACE_SCALE ? "descending" : "steady",
+      completedRep: false,
+      faceScale,
+      profile: nextProfile,
+    };
   }
 
-  if (currentState === "down") {
-    if (tiltDelta >= targetDepthTiltDelta) {
-      return { state: "bottom", stage: "bottom", completedRep: false, profile: nextProfile };
-    }
-
-    if (tiltDelta <= PUSHUP_TOP_TILT_DELTA) {
-      return { state: "standing", stage: "steady", completedRep: false, profile: nextProfile };
-    }
-
-    return { state: "down", stage: "descending", completedRep: false, profile: nextProfile };
+  if (faceScale <= TOP_FACE_SCALE) {
+    return {
+      state: "top",
+      stage: "steady",
+      completedRep: peakFaceScale >= DOWN_FACE_SCALE,
+      faceScale,
+      profile: { baselineFaceArea, peakFaceScale: 1 },
+    };
   }
 
-  if (currentState === "bottom") {
-    if (tiltDelta <= riseTiltDelta) {
-      return { state: "rising", stage: "rising", completedRep: false, profile: nextProfile };
-    }
-
-    return { state: "bottom", stage: "bottom", completedRep: false, profile: nextProfile };
-  }
-
-  if (tiltDelta <= PUSHUP_TOP_TILT_DELTA) {
-    return { state: "standing", stage: "steady", completedRep: true, profile: nextProfile };
-  }
-
-  if (tiltDelta >= targetDepthTiltDelta) {
-    return { state: "bottom", stage: "bottom", completedRep: false, profile: nextProfile };
-  }
-
-  return { state: "rising", stage: "rising", completedRep: false, profile: nextProfile };
+  return { state: "down", stage: "rising", completedRep: false, faceScale, profile: nextProfile };
 }

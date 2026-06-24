@@ -21,7 +21,7 @@ import { generateShareImage } from "@/lib/share-image";
 import { getLocalIsoDate, getMonthCalendarDays } from "@/lib/workout-summary";
 
 type WorkoutPhase = "setup" | "countdown" | "active" | "complete";
-type SensorStatus = "idle" | "listening" | "unsupported" | "blocked";
+type CameraStatus = "idle" | "loading" | "watching" | "unsupported" | "blocked";
 type SummaryStatus = "idle" | "loading" | "ready" | "error";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -31,6 +31,40 @@ interface WorkoutSummary {
   todayCompleted: boolean;
   totalDays: number;
   totalReps: number;
+}
+
+interface MediaPipeDetection {
+  boundingBox?: {
+    width: number;
+    height: number;
+  };
+}
+
+interface MediaPipeFaceDetectorResult {
+  detections: MediaPipeDetection[];
+}
+
+interface MediaPipeFaceDetector {
+  close: () => void;
+  detectForVideo: (video: HTMLVideoElement, timestampMs: number) => MediaPipeFaceDetectorResult;
+}
+
+interface MediaPipeVisionModule {
+  FaceDetector: {
+    createFromOptions: (fileset: unknown, options: Record<string, unknown>) => Promise<MediaPipeFaceDetector>;
+  };
+  FilesetResolver: {
+    forVisionTasks: (wasmPath: string) => Promise<unknown>;
+  };
+}
+
+const mediaPipeVersion = "0.10.22";
+const mediaPipeCdnBase = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${mediaPipeVersion}`;
+
+async function loadMediaPipeVision() {
+  const importFromUrl = new Function("url", "return import(url)") as (url: string) => Promise<MediaPipeVisionModule>;
+
+  return importFromUrl(`${mediaPipeCdnBase}/vision_bundle.mjs`);
 }
 
 const pushupUserStorageKey = "pushupUserId";
@@ -114,23 +148,18 @@ export function PushupCoachApp() {
   const [count, setCount] = useState(0);
   const [phase, setPhase] = useState<WorkoutPhase>("setup");
   const [, setLastMove] = useState<"ready" | "pushup" | "cheer">("ready");
-  const [sensorStatus, setSensorStatus] = useState<SensorStatus>("idle");
-  const [, setMotionLevel] = useState(0);
-  const [, setMotionStage] = useState<MotionStage>("steady");
-  const [, setIsCalibrating] = useState(false);
-  const [, setCalibrationProgress] = useState(0);
+  const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
+  const [motionStage, setMotionStage] = useState<MotionStage>("steady");
+  const [faceScale, setFaceScale] = useState(1);
   const [countdownValue, setCountdownValue] = useState<3 | 2 | 1 | 0>(3);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const baselineRef = useRef<number | null>(null);
-  const orientationBaselineRef = useRef<{ beta: number; gamma: number } | null>(null);
-  const orientationRef = useRef<{ beta: number | null; gamma: number | null }>({ beta: null, gamma: null });
-  const calibrationSamplesRef = useRef<number[]>([]);
-  const calibrationUntilRef = useRef(0);
-  const isCalibratingRef = useRef(false);
   const activeGoalRef = useRef(goal);
-  const motionStateRef = useRef<PushupMotionState>("standing");
+  const motionStateRef = useRef<PushupMotionState>("top");
   const motionProfileRef = useRef<PushupMotionProfile>(createPushupMotionProfile());
-  const listenerAttachedRef = useRef(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const detectorRef = useRef<MediaPipeFaceDetector | null>(null);
+  const cameraFrameRef = useRef<number | null>(null);
   const workoutStartedAtRef = useRef<number | null>(null);
   const lastSavedCompletionRef = useRef<string | null>(null);
 
@@ -251,121 +280,111 @@ export function PushupCoachApp() {
     });
   }, []);
 
-  const handleOrientation = useCallback((event: DeviceOrientationEvent) => {
-    orientationRef.current = {
-      beta: event.beta,
-      gamma: event.gamma,
-    };
+  const stopCamera = useCallback(() => {
+    if (cameraFrameRef.current !== null) {
+      window.cancelAnimationFrame(cameraFrameRef.current);
+      cameraFrameRef.current = null;
+    }
 
-    if (!orientationBaselineRef.current && event.beta !== null && event.gamma !== null) {
-      orientationBaselineRef.current = { beta: event.beta, gamma: event.gamma };
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    detectorRef.current?.close();
+    detectorRef.current = null;
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
   }, []);
 
-  const handleMotion = useCallback((event: DeviceMotionEvent) => {
-    const acceleration = event.accelerationIncludingGravity ?? event.acceleration;
+  const estimateFaceArea = useCallback(async () => {
+    const video = videoRef.current;
+    const detector = detectorRef.current;
 
-    if (!acceleration) {
-      return;
-    }
-
-    const x = acceleration.x ?? 0;
-    const y = acceleration.y ?? 0;
-    const z = acceleration.z ?? 0;
-    const magnitude = Math.sqrt(x * x + y * y + z * z);
-
-    if (isCalibratingRef.current || (calibrationUntilRef.current > 0 && calibrationUntilRef.current > event.timeStamp)) {
-      if (calibrationUntilRef.current <= 0) {
-        calibrationUntilRef.current = event.timeStamp + 2500;
-      }
-
-      calibrationSamplesRef.current.push(magnitude);
-      const remainingMs = Math.max(calibrationUntilRef.current - event.timeStamp, 0);
-      setCalibrationProgress(Math.min(100, Math.round(((2500 - remainingMs) / 2500) * 100)));
-
-      if (remainingMs === 0) {
-        const samples = calibrationSamplesRef.current;
-        baselineRef.current = samples.reduce((sum, sample) => sum + sample, 0) / Math.max(samples.length, 1);
-        isCalibratingRef.current = false;
-        setIsCalibrating(false);
-        setCalibrationProgress(100);
-        setMotionStage("steady");
-        speakText("기준 자세 측정 완료. 시작하세요.");
-      }
-
-      return;
-    }
-
-    if (!baselineRef.current) {
-      baselineRef.current = magnitude;
-    }
-
-    baselineRef.current = baselineRef.current * 0.96 + magnitude * 0.04;
-    const movement = Math.abs(magnitude - baselineRef.current);
-    const beta = orientationRef.current.beta;
-    const gamma = orientationRef.current.gamma;
-    const orientationBaseline = orientationBaselineRef.current;
-    const tiltDelta = beta !== null && gamma !== null && orientationBaseline
-      ? Math.abs(beta - orientationBaseline.beta) + Math.abs(gamma - orientationBaseline.gamma)
-      : 0;
-    const motionScore = movement + tiltDelta / 24;
-    setMotionLevel(Math.min(100, Math.round(motionScore * 20)));
-
-    const nextMotion = evaluatePushupMotion(motionStateRef.current, tiltDelta, motionProfileRef.current);
-
-    if (nextMotion.state !== motionStateRef.current && nextMotion.state === "down") {
-      setLastMove("pushup");
-    }
-
-    motionStateRef.current = nextMotion.state;
-    motionProfileRef.current = nextMotion.profile;
-    setMotionStage(nextMotion.stage);
-
-    if (nextMotion.completedRep) {
-      addPushup("sensor");
-    }
-  }, [addPushup]);
-
-  const connectMotionSensor = useCallback(async () => {
-    if (!("DeviceMotionEvent" in window)) {
-      setSensorStatus("unsupported");
+    if (!video || !detector || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      cameraFrameRef.current = window.requestAnimationFrame(() => void estimateFaceArea());
       return;
     }
 
     try {
-      const DeviceMotion = window.DeviceMotionEvent as DeviceMotionEventConstructorWithPermission;
+      const result = detector.detectForVideo(video, performance.now());
+      const face = result.detections[0];
 
-      if (typeof DeviceMotion.requestPermission === "function") {
-        const permission = await DeviceMotion.requestPermission();
+      if (face?.boundingBox) {
+        const faceArea = face.boundingBox.width * face.boundingBox.height;
+        const nextMotion = evaluatePushupMotion(motionStateRef.current, faceArea, motionProfileRef.current);
 
-        if (permission !== "granted") {
-          setSensorStatus("blocked");
-          return;
+        motionStateRef.current = nextMotion.state;
+        motionProfileRef.current = nextMotion.profile;
+        setMotionStage(nextMotion.stage);
+        setFaceScale(nextMotion.faceScale);
+
+        if (nextMotion.state === "down") {
+          setLastMove("pushup");
+        }
+
+        if (nextMotion.completedRep) {
+          addPushup("sensor");
         }
       }
-
-      const DeviceOrientation = window.DeviceOrientationEvent as DeviceOrientationEventConstructorWithPermission | undefined;
-
-      if (typeof DeviceOrientation?.requestPermission === "function") {
-        const permission = await DeviceOrientation.requestPermission();
-
-        if (permission !== "granted") {
-          setSensorStatus("blocked");
-          return;
-        }
-      }
-
-      if (!listenerAttachedRef.current) {
-        window.addEventListener("devicemotion", handleMotion, { passive: true });
-        window.addEventListener("deviceorientation", handleOrientation, { passive: true });
-        listenerAttachedRef.current = true;
-      }
-
-      setSensorStatus("listening");
     } catch {
-      setSensorStatus("blocked");
+      setCameraStatus("blocked");
+      stopCamera();
+      return;
     }
-  }, [handleMotion, handleOrientation]);
+
+    cameraFrameRef.current = window.requestAnimationFrame(() => void estimateFaceArea());
+  }, [addPushup, stopCamera]);
+
+  const connectCamera = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraStatus("unsupported");
+      return;
+    }
+
+    setCameraStatus("loading");
+
+    try {
+      if (!detectorRef.current) {
+        const vision = await loadMediaPipeVision();
+        const fileset = await vision.FilesetResolver.forVisionTasks(`${mediaPipeCdnBase}/wasm`);
+
+        detectorRef.current = await vision.FaceDetector.createFromOptions(fileset, {
+          baseOptions: {
+            delegate: "GPU",
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
+          },
+          minDetectionConfidence: 0.5,
+          runningMode: "VIDEO",
+        });
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      setCameraStatus("watching");
+      motionStateRef.current = "top";
+      motionProfileRef.current = createPushupMotionProfile();
+      setFaceScale(1);
+      setMotionStage("steady");
+      cameraFrameRef.current = window.requestAnimationFrame(() => void estimateFaceArea());
+    } catch {
+      setCameraStatus("blocked");
+      stopCamera();
+    }
+  }, [estimateFaceArea, stopCamera]);
 
   const startWorkout = useCallback(async () => {
     if (!isGoalValid) {
@@ -380,21 +399,14 @@ export function PushupCoachApp() {
     setPhase("countdown");
     setLastMove("ready");
     setMotionStage("steady");
-    setMotionLevel(0);
-    baselineRef.current = null;
-    orientationBaselineRef.current = null;
-    calibrationSamplesRef.current = [];
-    calibrationUntilRef.current = 0;
-    isCalibratingRef.current = true;
-    motionStateRef.current = "standing";
+    setFaceScale(1);
+    motionStateRef.current = "top";
     motionProfileRef.current = createPushupMotionProfile();
     workoutStartedAtRef.current = null;
-    setIsCalibrating(true);
-    setCalibrationProgress(0);
     setCountdownValue(3);
     setElapsedSeconds(0);
-    await connectMotionSensor();
-  }, [connectMotionSensor, isGoalValid, normalizedGoal]);
+    await connectCamera();
+  }, [connectCamera, isGoalValid, normalizedGoal]);
 
   useEffect(() => {
     if (phase !== "countdown") {
@@ -450,10 +462,9 @@ export function PushupCoachApp() {
 
   useEffect(() => {
     return () => {
-      window.removeEventListener("devicemotion", handleMotion);
-      window.removeEventListener("deviceorientation", handleOrientation);
+      stopCamera();
     };
-  }, [handleMotion, handleOrientation]);
+  }, [stopCamera]);
 
   async function shareResult() {
     try {
@@ -672,6 +683,26 @@ export function PushupCoachApp() {
                 </div>
 
                 <div className="flex flex-1 flex-col items-center justify-center gap-7">
+                  <div className="relative aspect-[4/3] w-full overflow-hidden rounded-3xl border border-[var(--coach-line)] bg-[var(--coach-surface)]">
+                    <video
+                      ref={videoRef}
+                      className="size-full scale-x-[-1] object-cover"
+                      muted
+                      playsInline
+                      aria-label="푸시업 카메라 미리보기"
+                    />
+                    <div className="absolute inset-x-4 bottom-4 flex items-center justify-between rounded-full bg-black/35 px-4 py-2 text-xs font-medium text-white backdrop-blur">
+                      <span>
+                        {cameraStatus === "watching" && (motionStage === "bottom" ? "가까워짐" : motionStage === "rising" ? "올라오는 중" : "대기")}
+                        {cameraStatus === "loading" && "카메라 준비 중"}
+                        {cameraStatus === "blocked" && "카메라 권한 필요"}
+                        {cameraStatus === "unsupported" && "카메라 미지원"}
+                        {cameraStatus === "idle" && "카메라 대기"}
+                      </span>
+                      <span>{faceScale.toFixed(2)}x</span>
+                    </div>
+                  </div>
+
                   <div
                     className="progress-ring grid aspect-square w-full max-w-[300px] place-items-center rounded-full"
                     style={{ "--progress": `${progress}%` } as React.CSSProperties}
@@ -697,9 +728,9 @@ export function PushupCoachApp() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <Button type="button" variant="outline" className="rounded-full" onClick={connectMotionSensor} disabled={sensorStatus === "listening" || count >= goal}>
+                  <Button type="button" variant="outline" className="rounded-full" onClick={connectCamera} disabled={cameraStatus === "watching" || cameraStatus === "loading" || count >= goal}>
                     <ActivityIcon data-icon="inline-start" />
-                    센서
+                    카메라
                   </Button>
                   <Button type="button" className="rounded-full" onClick={() => addPushup()} disabled={count >= goal}>
                     수동 +1
@@ -774,14 +805,4 @@ declare global {
   interface Window {
     webkitAudioContext?: typeof AudioContext;
   }
-}
-
-interface DeviceMotionEventConstructorWithPermission {
-  new (type: string, eventInitDict?: DeviceMotionEventInit): DeviceMotionEvent;
-  requestPermission?: () => Promise<"granted" | "denied">;
-}
-
-interface DeviceOrientationEventConstructorWithPermission {
-  new (type: string, eventInitDict?: DeviceOrientationEventInit): DeviceOrientationEvent;
-  requestPermission?: () => Promise<"granted" | "denied">;
 }
