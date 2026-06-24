@@ -562,10 +562,10 @@ export function PushupCoachApp() {
           </div>
         </header>
 
-        <div className="flex flex-1 items-stretch pb-3">
-          <section className="coach-card flex w-full flex-col overflow-hidden rounded-[2rem] border border-[var(--coach-line)] bg-[var(--coach-panel)]">
+        <div className="pb-3">
+          <section className="coach-card flex w-full flex-col rounded-[2rem] border border-[var(--coach-line)] bg-[var(--coach-panel)]">
             {phase === "setup" && (
-              <div className="flex min-h-[calc(100svh-8rem)] flex-col justify-between gap-8 p-6">
+              <div className="flex flex-col gap-8 p-6">
                 <div className="flex flex-col gap-7">
                   <div className="flex flex-col gap-3 pt-2">
                     <p className="max-w-[11ch] text-[2.15rem] font-semibold leading-[1.05] text-[var(--coach-ink)]">푸시업 몇 개 할까요?</p>
