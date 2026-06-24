@@ -1,7 +1,10 @@
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 interface WorkoutCompletionRecord {
+  goal: number;
   count: number;
+  elapsedSeconds: number;
+  completedAt: string;
 }
 
 export function isIsoDate(value: unknown): value is string {
