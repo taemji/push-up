@@ -548,7 +548,7 @@ export function PushupCoachApp() {
 
   return (
     <main className="coach-shell min-h-svh overflow-hidden text-foreground">
-      <section className="mx-auto flex min-h-svh w-full max-w-[430px] flex-col px-5 py-5">
+      <section className="mx-auto flex h-svh w-full max-w-[430px] flex-col px-5 py-5">
         <header className="flex justify-center pb-5 pt-1 text-center">
           <div className="flex flex-col items-center gap-2">
             <h1 className="coach-wordmark" aria-label="Push-up Coach">
@@ -562,11 +562,11 @@ export function PushupCoachApp() {
           </div>
         </header>
 
-        <div className="flex flex-1 items-stretch pb-3">
-          <section className="coach-card flex w-full flex-col overflow-hidden rounded-[2rem] border border-[var(--coach-line)] bg-[var(--coach-panel)]">
+        <div className="flex min-h-0 flex-1 items-stretch pb-3">
+          <section className="coach-card flex min-h-0 w-full flex-col overflow-hidden rounded-[2rem] border border-[var(--coach-line)] bg-[var(--coach-panel)]">
             {phase === "setup" && (
-              <div className="flex min-h-[calc(100svh-8rem)] flex-col justify-between gap-8 p-6">
-                <div className="flex flex-col gap-7">
+              <div className="flex min-h-0 flex-1 flex-col gap-6 p-6">
+                <div className="flex min-h-0 flex-1 flex-col gap-7 overflow-y-auto pr-1" data-testid="setup-records-scroll">
                   <div className="flex flex-col gap-3 pt-2">
                     <p className="max-w-[11ch] text-[2.15rem] font-semibold leading-[1.05] text-[var(--coach-ink)]">푸시업 몇 개 할까요?</p>
                     <div className="h-1 w-12 rounded-full bg-[var(--coach-accent)]" aria-hidden="true" />
@@ -706,7 +706,7 @@ export function PushupCoachApp() {
                   </div>
                 </div>
 
-                <Button type="button" size="lg" className="h-14 rounded-full" onClick={startWorkout} disabled={!isGoalValid}>
+                <Button type="button" size="lg" className="h-14 shrink-0 rounded-full" onClick={startWorkout} disabled={!isGoalValid}>
                   시작하기
                   <CheckIcon data-icon="inline-end" />
                 </Button>

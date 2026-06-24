@@ -10,6 +10,19 @@ test("home page loads", async ({ page }) => {
   await expect(page.getByText("100")).toBeVisible();
 });
 
+test("records area scrolls to the cumulative pushup chart", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 667 });
+  await page.goto("/");
+
+  const recordsScrollArea = page.getByTestId("setup-records-scroll");
+  await recordsScrollArea.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+
+  await expect(page.getByText("누적 푸시업")).toBeVisible();
+  await expect(page.getByRole("button", { name: /시작하기/ })).toBeVisible();
+});
+
 test("start flow shows countdown before workout", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /시작하기/ }).click();
