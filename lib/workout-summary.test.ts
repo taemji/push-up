@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { calculateCurrentStreak, getMonthCalendarDays } from "@/lib/workout-summary";
+import { calculateCurrentStreak, getMonthCalendarDays, sumWorkoutReps } from "@/lib/workout-summary";
 
 describe("calculateCurrentStreak", () => {
   it("counts consecutive completions ending today", () => {
@@ -22,5 +22,22 @@ describe("getMonthCalendarDays", () => {
 
     expect(days.slice(0, 2)).toEqual([null, "2026-06-01"]);
     expect(days.at(-1)).toBe("2026-06-30");
+  });
+});
+
+describe("sumWorkoutReps", () => {
+  it("sums counts from Redis object and JSON string records", () => {
+    expect(sumWorkoutReps({
+      "2026-06-21": { count: 40 },
+      "2026-06-22": JSON.stringify({ count: 60 }),
+    })).toBe(100);
+  });
+
+  it("ignores missing record counts", () => {
+    expect(sumWorkoutReps({
+      "2026-06-21": { goal: 100 },
+      "2026-06-22": null,
+      "2026-06-23": { count: 25 },
+    })).toBe(25);
   });
 });

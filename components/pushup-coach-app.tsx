@@ -23,6 +23,7 @@ import { getLocalIsoDate, getMonthCalendarDays } from "@/lib/workout-summary";
 type WorkoutPhase = "setup" | "countdown" | "active" | "complete";
 type CameraStatus = "idle" | "loading" | "watching" | "unsupported" | "blocked";
 type SummaryStatus = "idle" | "loading" | "ready" | "error";
+type UserTotalsStatus = "idle" | "loading" | "ready" | "error";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 interface WorkoutSummary {
@@ -30,6 +31,12 @@ interface WorkoutSummary {
   currentStreak: number;
   todayCompleted: boolean;
   totalDays: number;
+  totalReps: number;
+}
+
+interface UserTotalSummary {
+  userId: PushupUserId;
+  userName: string;
   totalReps: number;
 }
 
@@ -142,6 +149,8 @@ export function PushupCoachApp() {
   const [selectedUserId, setSelectedUserId] = useState<PushupUserId>("jooyoung");
   const [workoutSummary, setWorkoutSummary] = useState<WorkoutSummary>(emptyWorkoutSummary);
   const [summaryStatus, setSummaryStatus] = useState<SummaryStatus>("idle");
+  const [userTotals, setUserTotals] = useState<UserTotalSummary[]>([]);
+  const [userTotalsStatus, setUserTotalsStatus] = useState<UserTotalsStatus>("idle");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [goal, setGoal] = useState(100);
   const [goalInput, setGoalInput] = useState("100");
@@ -166,6 +175,8 @@ export function PushupCoachApp() {
   const todayIsoDate = useMemo(() => getLocalIsoDate(), []);
   const calendarDays = useMemo(() => getMonthCalendarDays(todayIsoDate.slice(0, 7)), [todayIsoDate]);
   const completedDateSet = useMemo(() => new Set(workoutSummary.completionDates), [workoutSummary.completionDates]);
+  const userTotalById = useMemo(() => new Map(userTotals.map((userTotal) => [userTotal.userId, userTotal])), [userTotals]);
+  const maxUserTotalReps = useMemo(() => Math.max(1, ...userTotals.map((userTotal) => userTotal.totalReps)), [userTotals]);
   const selectedUserName = getPushupUserName(selectedUserId);
   const currentMonthLabel = `${Number(todayIsoDate.slice(5, 7))}월`;
   const progress = Math.min(100, Math.round((count / goal) * 100));
@@ -196,6 +207,25 @@ export function PushupCoachApp() {
     }
   }, [todayIsoDate]);
 
+  const loadUserTotals = useCallback(async () => {
+    setUserTotalsStatus("loading");
+
+    try {
+      const response = await fetch("/api/workouts/totals");
+
+      if (!response.ok) {
+        throw new Error("Failed to load workout totals.");
+      }
+
+      const summary = await response.json() as { userTotals?: UserTotalSummary[] };
+      setUserTotals(summary.userTotals ?? []);
+      setUserTotalsStatus("ready");
+    } catch {
+      setUserTotals([]);
+      setUserTotalsStatus("error");
+    }
+  }, []);
+
   const saveWorkoutCompletion = useCallback(async () => {
     setSaveStatus("saving");
 
@@ -220,10 +250,15 @@ export function PushupCoachApp() {
       setWorkoutSummary((currentSummary) => ({ ...currentSummary, ...summary, todayCompleted: true }));
       setSaveStatus("saved");
       await loadWorkoutSummary(selectedUserId);
+      await loadUserTotals();
     } catch {
       setSaveStatus("error");
     }
-  }, [count, elapsedSeconds, goal, loadWorkoutSummary, selectedUserId, todayIsoDate]);
+  }, [count, elapsedSeconds, goal, loadUserTotals, loadWorkoutSummary, selectedUserId, todayIsoDate]);
+
+  useEffect(() => {
+    void loadUserTotals();
+  }, [loadUserTotals]);
 
   useEffect(() => {
     const storedUserId = window.localStorage.getItem(pushupUserStorageKey);
@@ -630,6 +665,43 @@ export function PushupCoachApp() {
                     </div>
                     {summaryStatus === "error" && (
                       <p className="mt-3 text-xs text-muted-foreground">Vercel DB 환경변수를 연결하면 기록이 저장됩니다.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl bg-[var(--coach-surface)] p-4">
+                    <div className="mb-4 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-[var(--coach-ink)]">누적 푸시업</p>
+                      <p className="text-xs text-muted-foreground">
+                        {userTotalsStatus === "loading" ? "불러오는 중" : "전체"}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 text-center">
+                      {PUSHUP_USERS.map((user) => {
+                        const userTotal = userTotalById.get(user.id);
+                        const totalReps = userTotal?.totalReps ?? 0;
+                        const totalProgress = totalReps > 0 ? Math.max(4, Math.round((totalReps / maxUserTotalReps) * 100)) : 0;
+
+                        return (
+                          <div key={user.id} className="flex min-w-0 flex-col items-center gap-2">
+                            <div
+                              className="total-ring grid size-20 place-items-center rounded-full"
+                              style={{ "--progress": `${totalProgress}%` } as React.CSSProperties}
+                              aria-label={`${user.name} 누적 ${totalReps}개`}
+                            >
+                              <div className="grid size-[72%] place-items-center rounded-full bg-[var(--coach-surface)]">
+                                <span className="text-base font-semibold text-[var(--coach-ink)]">{totalReps}</span>
+                              </div>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-[var(--coach-ink)]">{user.name}</p>
+                              <p className="text-xs text-muted-foreground">누적</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {userTotalsStatus === "error" && (
+                      <p className="mt-3 text-xs text-muted-foreground">DB 연결 후 유저별 누적 차트를 볼 수 있어요.</p>
                     )}
                   </div>
                 </div>

@@ -2,11 +2,7 @@ import { Redis } from "@upstash/redis";
 import { NextResponse } from "next/server";
 
 import { isPushupUserId } from "@/lib/pushup-users";
-import { calculateCurrentStreak, isIsoDate } from "@/lib/workout-summary";
-
-interface WorkoutCompletionRecord {
-  count: number;
-}
+import { calculateCurrentStreak, isIsoDate, sumWorkoutReps } from "@/lib/workout-summary";
 
 function getRedisClient() {
   const url = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
@@ -21,30 +17,6 @@ function getRedisClient() {
 
 function getWorkoutCompletionKey(userId: string) {
   return `pushup:workout-completions:${userId}`;
-}
-
-function parseWorkoutCompletionRecord(value: unknown): Partial<WorkoutCompletionRecord> | null {
-  if (!value) {
-    return null;
-  }
-
-  if (typeof value === "string") {
-    return JSON.parse(value) as Partial<WorkoutCompletionRecord>;
-  }
-
-  if (typeof value === "object") {
-    return value as Partial<WorkoutCompletionRecord>;
-  }
-
-  return null;
-}
-
-function sumWorkoutReps(records: Record<string, unknown>) {
-  return Object.values(records).reduce<number>((sum, recordValue) => {
-    const record = parseWorkoutCompletionRecord(recordValue);
-
-    return sum + (record?.count ?? 0);
-  }, 0);
 }
 
 export async function GET(request: Request) {

@@ -1,5 +1,9 @@
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
+interface WorkoutCompletionRecord {
+  count: number;
+}
+
 export function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && isoDatePattern.test(value);
 }
@@ -47,4 +51,28 @@ export function getMonthCalendarDays(monthIso: string) {
     ...Array.from({ length: leadingEmptyDays }, () => null),
     ...Array.from({ length: daysInMonth }, (_, index) => getLocalIsoDate(new Date(year, monthIndex, index + 1))),
   ];
+}
+
+export function parseWorkoutCompletionRecord(value: unknown): Partial<WorkoutCompletionRecord> | null {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return JSON.parse(value) as Partial<WorkoutCompletionRecord>;
+  }
+
+  if (typeof value === "object") {
+    return value as Partial<WorkoutCompletionRecord>;
+  }
+
+  return null;
+}
+
+export function sumWorkoutReps(records: Record<string, unknown>) {
+  return Object.values(records).reduce<number>((sum, recordValue) => {
+    const record = parseWorkoutCompletionRecord(recordValue);
+
+    return sum + (record?.count ?? 0);
+  }, 0);
 }
