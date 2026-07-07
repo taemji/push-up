@@ -20,7 +20,7 @@ import { PUSHUP_USERS, getPushupUserName, isPushupUserId, type PushupUserId } fr
 import { generateShareImage } from "@/lib/share-image";
 import { getLocalIsoDate, getMonthCalendarDays } from "@/lib/workout-summary";
 
-type WorkoutPhase = "setup" | "countdown" | "active" | "complete";
+type WorkoutPhase = "setup" | "countdown" | "active" | "rest" | "complete";
 type CameraStatus = "idle" | "loading" | "watching" | "unsupported" | "blocked";
 type SummaryStatus = "idle" | "loading" | "ready" | "error";
 type UserTotalsStatus = "idle" | "loading" | "ready" | "error";
@@ -75,6 +75,10 @@ async function loadMediaPipeVision() {
 }
 
 const pushupUserStorageKey = "pushupUserId";
+const maxWorkoutSets = 20;
+const maxRepsPerSet = 999;
+const maxTotalGoal = 999;
+const maxRestSeconds = 3600;
 
 const emptyWorkoutSummary: WorkoutSummary = {
   completionDates: [],
@@ -152,8 +156,15 @@ export function PushupCoachApp() {
   const [userTotals, setUserTotals] = useState<UserTotalSummary[]>([]);
   const [userTotalsStatus, setUserTotalsStatus] = useState<UserTotalsStatus>("idle");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [goal, setGoal] = useState(100);
-  const [goalInput, setGoalInput] = useState("100");
+  const [setCountInput, setSetCountInput] = useState("3");
+  const [repsPerSetInput, setRepsPerSetInput] = useState("10");
+  const [restSecondsInput, setRestSecondsInput] = useState("60");
+  const [workoutSetCount, setWorkoutSetCount] = useState(3);
+  const [workoutRepsPerSet, setWorkoutRepsPerSet] = useState(10);
+  const [workoutRestSeconds, setWorkoutRestSeconds] = useState(0);
+  const [currentSet, setCurrentSet] = useState(1);
+  const [setRepCount, setSetRepCount] = useState(0);
+  const [restRemainingSeconds, setRestRemainingSeconds] = useState(0);
   const [count, setCount] = useState(0);
   const [phase, setPhase] = useState<WorkoutPhase>("setup");
   const [, setLastMove] = useState<"ready" | "pushup" | "cheer">("ready");
@@ -162,7 +173,14 @@ export function PushupCoachApp() {
   const [faceScale, setFaceScale] = useState(1);
   const [countdownValue, setCountdownValue] = useState<3 | 2 | 1 | 0>(3);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const activeGoalRef = useRef(goal);
+  const activeGoalRef = useRef(30);
+  const phaseRef = useRef<WorkoutPhase>("setup");
+  const countRef = useRef(0);
+  const workoutSetCountRef = useRef(3);
+  const workoutRepsPerSetRef = useRef(10);
+  const workoutRestSecondsRef = useRef(0);
+  const currentSetRef = useRef(1);
+  const setRepCountRef = useRef(0);
   const motionStateRef = useRef<PushupMotionState>("top");
   const motionProfileRef = useRef<PushupMotionProfile>(createPushupMotionProfile());
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -179,13 +197,31 @@ export function PushupCoachApp() {
   const maxUserTotalReps = useMemo(() => Math.max(1, ...userTotals.map((userTotal) => userTotal.totalReps)), [userTotals]);
   const selectedUserName = getPushupUserName(selectedUserId);
   const currentMonthLabel = `${Number(todayIsoDate.slice(5, 7))}월`;
-  const progress = Math.min(100, Math.round((count / goal) * 100));
+  const workoutGoal = workoutSetCount * workoutRepsPerSet;
+  const progress = Math.min(100, Math.round((count / workoutGoal) * 100));
+  const restProgress = workoutRestSeconds > 0
+    ? Math.min(100, Math.round(((workoutRestSeconds - restRemainingSeconds) / workoutRestSeconds) * 100))
+    : 100;
   const elapsedTimeText = formatDuration(elapsedSeconds);
-  const normalizedGoal = Number(goalInput);
-  const isGoalValid = Number.isInteger(normalizedGoal) && normalizedGoal >= 1 && normalizedGoal <= 999;
+  const restRemainingTimeText = formatDuration(restRemainingSeconds);
+  const workoutRestTimeText = workoutRestSeconds > 0 ? formatDuration(workoutRestSeconds) : "없음";
+  const normalizedSetCount = Number(setCountInput);
+  const normalizedRepsPerSet = Number(repsPerSetInput);
+  const normalizedRestSeconds = Number(restSecondsInput);
+  const isSetCountValid = Number.isInteger(normalizedSetCount) && normalizedSetCount >= 1 && normalizedSetCount <= maxWorkoutSets;
+  const isRepsPerSetValid = Number.isInteger(normalizedRepsPerSet) && normalizedRepsPerSet >= 1 && normalizedRepsPerSet <= maxRepsPerSet;
+  const hasRestBetweenSets = isSetCountValid && normalizedSetCount > 1;
+  const isRestSecondsValid = !hasRestBetweenSets || (Number.isInteger(normalizedRestSeconds) && normalizedRestSeconds >= 0 && normalizedRestSeconds <= maxRestSeconds);
+  const normalizedGoal = normalizedSetCount * normalizedRepsPerSet;
+  const isGoalValid = isSetCountValid && isRepsPerSetValid && isRestSecondsValid && normalizedGoal <= maxTotalGoal;
+  const restSecondsDisplayValue = hasRestBetweenSets ? restSecondsInput : "0";
+  const restTimeText = hasRestBetweenSets ? `휴식 ${normalizedRestSeconds}초` : "휴식 없음";
+  const workoutPlanText = isGoalValid
+    ? `${normalizedSetCount}세트 x ${normalizedRepsPerSet}개 · ${restTimeText}`
+    : "입력을 확인해 주세요";
   const resultText = useMemo(
-    () => `오늘 푸시업 ${count}개 완료! 목표 ${goal}개 중 ${progress}% 달성했어요. 운동 시간 ${elapsedTimeText}.`,
-    [count, elapsedTimeText, goal, progress]
+    () => `오늘 푸시업 ${count}개 완료! 목표 ${workoutGoal}개 중 ${progress}% 달성했어요. 운동 시간 ${elapsedTimeText}.`,
+    [count, elapsedTimeText, progress, workoutGoal]
   );
 
   const loadWorkoutSummary = useCallback(async (userId: PushupUserId) => {
@@ -236,7 +272,7 @@ export function PushupCoachApp() {
         body: JSON.stringify({
           userId: selectedUserId,
           workoutDate: todayIsoDate,
-          goal,
+          goal: workoutGoal,
           count,
           elapsedSeconds,
         }),
@@ -254,7 +290,7 @@ export function PushupCoachApp() {
     } catch {
       setSaveStatus("error");
     }
-  }, [count, elapsedSeconds, goal, loadUserTotals, loadWorkoutSummary, selectedUserId, todayIsoDate]);
+  }, [count, elapsedSeconds, loadUserTotals, loadWorkoutSummary, selectedUserId, todayIsoDate, workoutGoal]);
 
   useEffect(() => {
     void loadUserTotals();
@@ -275,11 +311,39 @@ export function PushupCoachApp() {
   }, [loadWorkoutSummary, selectedUserId]);
 
   useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    countRef.current = count;
+  }, [count]);
+
+  useEffect(() => {
+    workoutSetCountRef.current = workoutSetCount;
+  }, [workoutSetCount]);
+
+  useEffect(() => {
+    workoutRepsPerSetRef.current = workoutRepsPerSet;
+  }, [workoutRepsPerSet]);
+
+  useEffect(() => {
+    workoutRestSecondsRef.current = workoutRestSeconds;
+  }, [workoutRestSeconds]);
+
+  useEffect(() => {
+    currentSetRef.current = currentSet;
+  }, [currentSet]);
+
+  useEffect(() => {
+    setRepCountRef.current = setRepCount;
+  }, [setRepCount]);
+
+  useEffect(() => {
     if (phase !== "complete" || count <= 0) {
       return;
     }
 
-    const completionKey = `${selectedUserId}:${todayIsoDate}:${goal}:${count}:${elapsedSeconds}`;
+    const completionKey = `${selectedUserId}:${todayIsoDate}:${workoutGoal}:${count}:${elapsedSeconds}`;
 
     if (lastSavedCompletionRef.current === completionKey) {
       return;
@@ -287,32 +351,77 @@ export function PushupCoachApp() {
 
     lastSavedCompletionRef.current = completionKey;
     void saveWorkoutCompletion();
-  }, [count, elapsedSeconds, goal, phase, saveWorkoutCompletion, selectedUserId, todayIsoDate]);
+  }, [count, elapsedSeconds, phase, saveWorkoutCompletion, selectedUserId, todayIsoDate, workoutGoal]);
 
   const addPushup = useCallback((source: "manual" | "sensor" = "manual") => {
+    if (phaseRef.current !== "active") {
+      return;
+    }
+
+    const currentGoal = activeGoalRef.current;
+    const currentCount = countRef.current;
+    const repsPerSet = workoutRepsPerSetRef.current;
+    const totalSets = workoutSetCountRef.current;
+    const restSeconds = workoutRestSecondsRef.current;
+    const currentSetNumber = currentSetRef.current;
+    const currentSetReps = setRepCountRef.current;
+
+    if (currentCount >= currentGoal || currentSetReps >= repsPerSet) {
+      return;
+    }
+
+    const nextCount = Math.min(currentCount + 1, currentGoal);
+    const nextSetRepCount = Math.min(currentSetReps + 1, repsPerSet);
+
+    countRef.current = nextCount;
+    setRepCountRef.current = nextSetRepCount;
+
     setLastMove("pushup");
 
     window.setTimeout(() => {
       setLastMove("cheer");
     }, source === "sensor" ? 120 : 160);
 
-    setCount((currentCount) => {
-      const currentGoal = activeGoalRef.current;
-      const nextCount = Math.min(currentCount + 1, currentGoal);
-      playCountSound();
+    setCount(nextCount);
+    setSetRepCount(nextSetRepCount);
+    playCountSound();
+    speakMilestone(nextCount, currentGoal);
 
-      speakMilestone(nextCount, currentGoal);
+    if (nextSetRepCount >= repsPerSet) {
+      window.setTimeout(() => {
+        if (phaseRef.current !== "active") {
+          return;
+        }
 
-      if (nextCount >= currentGoal) {
-        window.setTimeout(() => {
+        setLastMove("cheer");
+        setMotionStage("steady");
+
+        if (currentSetNumber >= totalSets || nextCount >= currentGoal) {
+          phaseRef.current = "complete";
           setPhase("complete");
-          setLastMove("cheer");
-          setMotionStage("steady");
-        }, 450);
-      }
+          return;
+        }
 
-      return nextCount;
-    });
+        const nextSet = currentSetNumber + 1;
+        currentSetRef.current = nextSet;
+        setRepCountRef.current = 0;
+        setCurrentSet(nextSet);
+        setSetRepCount(0);
+
+        if (restSeconds > 0) {
+          phaseRef.current = "rest";
+          setRestRemainingSeconds(restSeconds);
+          setPhase("rest");
+          speakText(`${currentSetNumber}세트 완료. 휴식하세요.`);
+          return;
+        }
+
+        phaseRef.current = "active";
+        setRestRemainingSeconds(0);
+        setPhase("active");
+        speakText(`${nextSet}세트 시작`);
+      }, 450);
+    }
   }, []);
 
   const stopCamera = useCallback(() => {
@@ -370,15 +479,18 @@ export function PushupCoachApp() {
     cameraFrameRef.current = window.requestAnimationFrame(() => void estimateFaceArea());
   }, [addPushup, stopCamera]);
 
-  const connectCamera = useCallback(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraStatus("unsupported");
+  const startCameraTracking = useCallback(async () => {
+    const stream = streamRef.current;
+    const video = videoRef.current;
+
+    if (!stream || !video) {
       return;
     }
 
-    setCameraStatus("loading");
-
     try {
+      video.srcObject = stream;
+      await video.play();
+
       if (!detectorRef.current) {
         const vision = await loadMediaPipeVision();
         const fileset = await vision.FilesetResolver.forVisionTasks(`${mediaPipeCdnBase}/wasm`);
@@ -393,7 +505,33 @@ export function PushupCoachApp() {
         });
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
+      setCameraStatus("watching");
+      motionStateRef.current = "top";
+      motionProfileRef.current = createPushupMotionProfile();
+      setFaceScale(1);
+      setMotionStage("steady");
+
+      if (cameraFrameRef.current !== null) {
+        window.cancelAnimationFrame(cameraFrameRef.current);
+      }
+
+      cameraFrameRef.current = window.requestAnimationFrame(() => void estimateFaceArea());
+    } catch {
+      setCameraStatus("blocked");
+      stopCamera();
+    }
+  }, [estimateFaceArea, stopCamera]);
+
+  const connectCamera = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraStatus("unsupported");
+      return;
+    }
+
+    setCameraStatus("loading");
+
+    try {
+      const stream = streamRef.current ?? await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "user",
           width: { ideal: 640 },
@@ -403,34 +541,42 @@ export function PushupCoachApp() {
       });
 
       streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-
-      setCameraStatus("watching");
-      motionStateRef.current = "top";
-      motionProfileRef.current = createPushupMotionProfile();
-      setFaceScale(1);
-      setMotionStage("steady");
-      cameraFrameRef.current = window.requestAnimationFrame(() => void estimateFaceArea());
+      await startCameraTracking();
     } catch {
       setCameraStatus("blocked");
       stopCamera();
     }
-  }, [estimateFaceArea, stopCamera]);
+  }, [startCameraTracking, stopCamera]);
 
   const startWorkout = useCallback(async () => {
     if (!isGoalValid) {
       return;
     }
 
-    setGoal(normalizedGoal);
-    activeGoalRef.current = normalizedGoal;
+    await connectCamera();
+
+    const nextGoal = normalizedGoal;
+    const nextSetCount = normalizedSetCount;
+    const nextRepsPerSet = normalizedRepsPerSet;
+    const nextRestSeconds = hasRestBetweenSets ? normalizedRestSeconds : 0;
+
+    setWorkoutSetCount(nextSetCount);
+    setWorkoutRepsPerSet(nextRepsPerSet);
+    setWorkoutRestSeconds(nextRestSeconds);
+    setCurrentSet(1);
+    setSetRepCount(0);
+    setRestRemainingSeconds(0);
+    activeGoalRef.current = nextGoal;
+    countRef.current = 0;
+    workoutSetCountRef.current = nextSetCount;
+    workoutRepsPerSetRef.current = nextRepsPerSet;
+    workoutRestSecondsRef.current = nextRestSeconds;
+    currentSetRef.current = 1;
+    setRepCountRef.current = 0;
     setCount(0);
     setSaveStatus("idle");
     lastSavedCompletionRef.current = null;
+    phaseRef.current = "countdown";
     setPhase("countdown");
     setLastMove("ready");
     setMotionStage("steady");
@@ -440,8 +586,15 @@ export function PushupCoachApp() {
     workoutStartedAtRef.current = null;
     setCountdownValue(3);
     setElapsedSeconds(0);
-    await connectCamera();
-  }, [connectCamera, isGoalValid, normalizedGoal]);
+  }, [connectCamera, hasRestBetweenSets, isGoalValid, normalizedGoal, normalizedRepsPerSet, normalizedRestSeconds, normalizedSetCount]);
+
+  useEffect(() => {
+    if (phase !== "active" || cameraStatus === "watching") {
+      return;
+    }
+
+    void startCameraTracking();
+  }, [cameraStatus, phase, startCameraTracking]);
 
   useEffect(() => {
     if (phase !== "countdown") {
@@ -459,13 +612,14 @@ export function PushupCoachApp() {
 
       if (nextStep === undefined) {
         window.clearInterval(timerId);
+        phaseRef.current = "active";
         setPhase("active");
         setLastMove("ready");
         return;
       }
 
       setCountdownValue(nextStep);
-      speakText(nextStep === 0 ? "시작" : `${nextStep}`);
+      speakText(nextStep === 0 ? `${currentSetRef.current}세트 시작` : `${nextStep}`);
     }, 900);
 
     return () => {
@@ -474,11 +628,13 @@ export function PushupCoachApp() {
   }, [phase]);
 
   useEffect(() => {
-    if (phase !== "active") {
+    if (phase !== "active" && phase !== "rest") {
       return;
     }
 
-    workoutStartedAtRef.current = performance.now();
+    if (workoutStartedAtRef.current === null) {
+      workoutStartedAtRef.current = performance.now();
+    }
 
     const timerId = window.setInterval(() => {
       const startedAt = workoutStartedAtRef.current;
@@ -489,6 +645,37 @@ export function PushupCoachApp() {
 
       setElapsedSeconds(Math.floor((performance.now() - startedAt) / 1000));
     }, 500);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "rest") {
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      setRestRemainingSeconds((currentSeconds) => {
+        if (currentSeconds <= 1) {
+          window.clearInterval(timerId);
+          phaseRef.current = "active";
+          setPhase("active");
+          setLastMove("ready");
+          speakText(`${currentSetRef.current}세트 시작`);
+          return 0;
+        }
+
+        const nextSeconds = currentSeconds - 1;
+
+        if (nextSeconds <= 3) {
+          speakText(`${nextSeconds}`);
+        }
+
+        return nextSeconds;
+      });
+    }, 1000);
 
     return () => {
       window.clearInterval(timerId);
@@ -568,7 +755,7 @@ export function PushupCoachApp() {
               <div className="flex flex-col gap-8 p-6">
                 <div className="flex flex-col gap-7">
                   <div className="flex flex-col gap-3 pt-2">
-                    <p className="max-w-[11ch] text-[2.15rem] font-semibold leading-[1.05] text-[var(--coach-ink)]">푸시업 몇 개 할까요?</p>
+                    <p className="max-w-[11ch] text-[2.15rem] font-semibold leading-[1.05] text-[var(--coach-ink)]">오늘 루틴을 설정해요</p>
                     <div className="h-1 w-12 rounded-full bg-[var(--coach-accent)]" aria-hidden="true" />
                   </div>
 
@@ -605,27 +792,59 @@ export function PushupCoachApp() {
                     </div>
                   </div>
 
-                  <div className="coach-target-panel flex min-h-[228px] flex-col items-center justify-center rounded-[1.5rem] px-6 text-center">
-                    <div className="flex items-end justify-center gap-2 text-[7.75rem] font-semibold leading-none text-[var(--coach-ink)]">
+                  <div className="coach-target-panel flex min-h-[228px] flex-col items-center justify-center gap-3 rounded-[1.5rem] px-6 text-center">
+                    <div className="flex items-end justify-center gap-2 text-[6.75rem] font-semibold leading-none text-[var(--coach-ink)]">
                       {isGoalValid ? normalizedGoal : "--"}
                       <span className="pb-4 text-2xl font-semibold text-[var(--coach-soft-ink)]">회</span>
                     </div>
+                    <p className="text-sm font-medium text-[var(--coach-soft-ink)]">{workoutPlanText}</p>
                   </div>
 
-                  <FieldGroup>
-                    <Field data-invalid={!isGoalValid}>
-                      <FieldLabel htmlFor="pushup-goal">목표 개수</FieldLabel>
+                  <FieldGroup className="grid grid-cols-3 gap-3">
+                    <Field data-invalid={!isSetCountValid}>
+                      <FieldLabel htmlFor="pushup-set-count">세트 수</FieldLabel>
                       <Input
-                        id="pushup-goal"
+                        id="pushup-set-count"
                         className="h-14 rounded-2xl text-lg"
                         inputMode="numeric"
                         min={1}
-                        max={999}
+                        max={maxWorkoutSets}
                         pattern="[0-9]*"
                         type="number"
-                        value={goalInput}
-                        aria-invalid={!isGoalValid}
-                        onChange={(event) => setGoalInput(event.target.value)}
+                        value={setCountInput}
+                        aria-invalid={!isSetCountValid}
+                        onChange={(event) => setSetCountInput(event.target.value)}
+                      />
+                    </Field>
+                    <Field data-invalid={!isRepsPerSetValid || (isSetCountValid && normalizedGoal > maxTotalGoal)}>
+                      <FieldLabel htmlFor="pushup-reps-per-set">세트당 개수</FieldLabel>
+                      <Input
+                        id="pushup-reps-per-set"
+                        className="h-14 rounded-2xl text-lg"
+                        inputMode="numeric"
+                        min={1}
+                        max={maxRepsPerSet}
+                        pattern="[0-9]*"
+                        type="number"
+                        value={repsPerSetInput}
+                        aria-invalid={!isRepsPerSetValid || (isSetCountValid && normalizedGoal > maxTotalGoal)}
+                        onChange={(event) => setRepsPerSetInput(event.target.value)}
+                      />
+                    </Field>
+                    <Field data-invalid={!isRestSecondsValid} data-disabled={!hasRestBetweenSets}>
+                      <FieldLabel htmlFor="pushup-rest-seconds">휴식 시간(초)</FieldLabel>
+                      <Input
+                        id="pushup-rest-seconds"
+                        className="h-14 rounded-2xl text-lg"
+                        inputMode="numeric"
+                        min={0}
+                        max={maxRestSeconds}
+                        pattern="[0-9]*"
+                        type="number"
+                        value={restSecondsDisplayValue}
+                        aria-invalid={!isRestSecondsValid}
+                        disabled={!hasRestBetweenSets}
+                        onChange={(event) => setRestSecondsInput(event.target.value)}
                       />
                     </Field>
                   </FieldGroup>
@@ -708,7 +927,14 @@ export function PushupCoachApp() {
             {phase === "countdown" && (
               <div className="relative flex min-h-[calc(100svh-8rem)] flex-col justify-between gap-6 p-6">
                 <div className="flex justify-end">
-                  <Button type="button" variant="ghost" onClick={() => setPhase("setup")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      phaseRef.current = "setup";
+                      setPhase("setup");
+                    }}
+                  >
                     취소
                   </Button>
                 </div>
@@ -731,7 +957,16 @@ export function PushupCoachApp() {
                   </div>
                 </div>
 
-                <Button type="button" variant="outline" className="h-14 rounded-full" onClick={() => setPhase("active")}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-14 rounded-full"
+                  onClick={() => {
+                    phaseRef.current = "active";
+                    setPhase("active");
+                    speakText(`${currentSetRef.current}세트 시작`);
+                  }}
+                >
                   바로 시작
                 </Button>
               </div>
@@ -742,8 +977,11 @@ export function PushupCoachApp() {
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex flex-col gap-1">
                     <p className="text-2xl font-semibold leading-none text-[var(--coach-ink)]">푸시업 수행</p>
+                    <p className="text-sm font-medium text-muted-foreground">{currentSet}/{workoutSetCount} 세트</p>
                   </div>
-                  <Badge variant="secondary">{elapsedTimeText}</Badge>
+                  <Badge variant="secondary" className="h-8! min-w-14 rounded-full! px-3! text-sm! leading-none">
+                    {elapsedTimeText}
+                  </Badge>
                 </div>
 
                 <div className="flex flex-1 flex-col items-center justify-center gap-7">
@@ -773,8 +1011,9 @@ export function PushupCoachApp() {
                   >
                     <div className="grid size-[78%] place-items-center rounded-full bg-[var(--coach-panel)] text-center">
                       <div>
-                        <p className="text-[6rem] font-semibold leading-none text-[var(--coach-ink)]">{count}</p>
-                        <p className="mt-2 text-sm text-muted-foreground">/ {goal} reps</p>
+                        <p className="text-[6rem] font-semibold leading-none text-[var(--coach-ink)]">{setRepCount}</p>
+                        <p className="mt-2 text-sm text-muted-foreground">{workoutRepsPerSet} reps</p>
+                        <p className="mt-1 text-xs text-muted-foreground">누적 {count}/{workoutGoal}</p>
                       </div>
                     </div>
                   </div>
@@ -782,27 +1021,118 @@ export function PushupCoachApp() {
 
                 <div className="grid grid-cols-2 gap-3 text-center">
                   <div className="rounded-2xl bg-[var(--coach-surface)] p-4">
-                    <p className="text-xs text-muted-foreground">목표</p>
-                    <p className="mt-1 text-xl font-semibold text-[var(--coach-ink)]">{goal}</p>
+                    <p className="text-xs text-muted-foreground">세트 수</p>
+                    <p className="mt-1 text-xl font-semibold text-[var(--coach-ink)]">{currentSet}/{workoutSetCount}</p>
                   </div>
                   <div className="rounded-2xl bg-[var(--coach-surface)] p-4">
-                    <p className="text-xs text-muted-foreground">진행</p>
+                    <p className="text-xs text-muted-foreground">세트당 개수</p>
+                    <p className="mt-1 text-xl font-semibold text-[var(--coach-ink)]">{setRepCount}/{workoutRepsPerSet}</p>
+                  </div>
+                  <div className="rounded-2xl bg-[var(--coach-surface)] p-4">
+                    <p className="text-xs text-muted-foreground">전체 진행</p>
                     <p className="mt-1 text-xl font-semibold text-[var(--coach-ink)]">{progress}%</p>
+                  </div>
+                  <div className="rounded-2xl bg-[var(--coach-surface)] p-4">
+                    <p className="text-xs text-muted-foreground">휴식</p>
+                    <p className="mt-1 text-xl font-semibold text-[var(--coach-ink)]">{workoutRestTimeText}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <Button type="button" variant="outline" className="rounded-full" onClick={connectCamera} disabled={cameraStatus === "watching" || cameraStatus === "loading" || count >= goal}>
+                  <Button type="button" variant="outline" className="rounded-full" onClick={connectCamera} disabled={cameraStatus === "watching" || cameraStatus === "loading" || count >= workoutGoal || setRepCount >= workoutRepsPerSet}>
                     <ActivityIcon data-icon="inline-start" />
                     카메라
                   </Button>
-                  <Button type="button" className="rounded-full" onClick={() => addPushup()} disabled={count >= goal}>
+                  <Button type="button" className="rounded-full" onClick={() => addPushup()} disabled={count >= workoutGoal || setRepCount >= workoutRepsPerSet}>
                     수동 +1
                   </Button>
-                  <Button type="button" variant="ghost" className="rounded-full" onClick={() => setPhase("setup")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="rounded-full"
+                    onClick={() => {
+                      phaseRef.current = "setup";
+                      setPhase("setup");
+                    }}
+                  >
                     목표 변경
                   </Button>
-                  <Button type="button" variant="outline" className="rounded-full" onClick={() => setPhase("complete")}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-full"
+                    onClick={() => {
+                      phaseRef.current = "complete";
+                      setPhase("complete");
+                    }}
+                  >
+                    종료
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {phase === "rest" && (
+              <div className="flex min-h-[calc(100svh-8rem)] flex-col justify-between gap-6 p-6">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col gap-1">
+                    <p className="text-2xl font-semibold leading-none text-[var(--coach-ink)]">휴식 중</p>
+                    <p className="text-sm font-medium text-muted-foreground">다음 {currentSet}/{workoutSetCount} 세트</p>
+                  </div>
+                  <Badge variant="secondary" className="h-8! min-w-14 rounded-full! px-3! text-sm! leading-none">
+                    {elapsedTimeText}
+                  </Badge>
+                </div>
+
+                <div className="flex flex-1 flex-col items-center justify-center gap-7 text-center">
+                  <div
+                    className="progress-ring grid aspect-square w-full max-w-[300px] place-items-center rounded-full"
+                    style={{ "--progress": `${restProgress}%` } as React.CSSProperties}
+                  >
+                    <div className="grid size-[78%] place-items-center rounded-full bg-[var(--coach-panel)]">
+                      <div>
+                        <p className="text-[4.25rem] font-semibold leading-none text-[var(--coach-ink)]">{restRemainingTimeText}</p>
+                        <p className="mt-3 text-sm text-muted-foreground">휴식 후 {workoutRepsPerSet}개</p>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-sm font-medium text-muted-foreground">완료 {count}/{workoutGoal}개 · {progress}%</p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <Button
+                    type="button"
+                    className="rounded-full"
+                    onClick={() => {
+                      phaseRef.current = "active";
+                      setRestRemainingSeconds(0);
+                      setLastMove("ready");
+                      setPhase("active");
+                      speakText(`${currentSetRef.current}세트 시작`);
+                    }}
+                  >
+                    다음 세트
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="rounded-full"
+                    onClick={() => {
+                      phaseRef.current = "setup";
+                      setPhase("setup");
+                    }}
+                  >
+                    목표 변경
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-full"
+                    onClick={() => {
+                      phaseRef.current = "complete";
+                      setPhase("complete");
+                    }}
+                  >
                     종료
                   </Button>
                 </div>
@@ -822,13 +1152,13 @@ export function PushupCoachApp() {
                   </div>
                   <div>
                     <h2 className="text-5xl font-semibold leading-none text-[var(--coach-ink)]">{count}개 완료</h2>
-                    <p className="mt-3 text-sm text-muted-foreground">목표 {goal}개 중 {progress}% 달성했어요.</p>
+                    <p className="mt-3 text-sm text-muted-foreground">{workoutSetCount}세트 x {workoutRepsPerSet}개 중 {progress}% 달성했어요.</p>
                   </div>
                 </div>
 
                 <div className="rounded-2xl bg-[var(--coach-surface)] p-5">
-                  <p className="text-4xl font-semibold text-[var(--coach-ink)]">{count} / {goal}</p>
-                  <p className="mt-2 text-sm text-muted-foreground">달성률 {progress}% · 운동 시간 {elapsedTimeText}</p>
+                  <p className="text-4xl font-semibold text-[var(--coach-ink)]">{count} / {workoutGoal}</p>
+                  <p className="mt-2 text-sm text-muted-foreground">달성률 {progress}% · 운동 시간 {elapsedTimeText} · 휴식 {workoutRestTimeText}</p>
                   <div className="mt-4 grid grid-cols-2 gap-3 text-center">
                     <div className="rounded-2xl bg-[var(--coach-panel)] p-3">
                       <p className="text-xs text-muted-foreground">연속 운동</p>

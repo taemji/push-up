@@ -4,10 +4,14 @@ test("home page loads", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveTitle("Push-up Coach");
   await expect(page.getByRole("heading", { name: "Push-up Coach" })).toBeVisible();
-  await expect(page.getByText("푸시업 몇 개 할까요?")).toBeVisible();
-  await expect(page.getByLabel("목표 개수")).toHaveValue("100");
+  await expect(page.getByText("오늘 루틴을 설정해요")).toBeVisible();
+  await expect(page.getByLabel("세트 수")).toHaveValue("3");
+  await expect(page.getByLabel("세트당 개수")).toHaveValue("10");
+  await expect(page.getByLabel("휴식 시간(초)")).toHaveValue("60");
+  await expect(page.getByLabel("휴식 시간(초)")).toBeEnabled();
+  await expect(page.getByText("3세트 x 10개 · 휴식 60초")).toBeVisible();
   await expect(page.getByRole("button", { name: /시작하기/ })).toBeVisible();
-  await expect(page.getByText("100")).toBeVisible();
+  await expect(page.getByText("30")).toBeVisible();
 });
 
 test("page shows the cumulative chart between the calendar and start button", async ({ page }) => {
@@ -30,4 +34,25 @@ test("start flow shows countdown before workout", async ({ page }) => {
   await expect(page.getByText("자세를 잡아주세요")).toBeVisible();
   await expect(page.getByText("곧 시작합니다")).toBeVisible();
   await expect(page.getByRole("button", { name: "바로 시작" })).toBeVisible();
+});
+
+test("configured set plan drives workout and rest screen", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("세트 수").fill("2");
+  await page.getByLabel("세트당 개수").fill("1");
+  await expect(page.getByLabel("휴식 시간(초)")).toHaveValue("60");
+  await expect(page.getByText("2세트 x 1개 · 휴식 60초")).toBeVisible();
+
+  await page.getByRole("button", { name: /시작하기/ }).click();
+  await page.getByRole("button", { name: "바로 시작" }).click();
+  await expect(page.getByText("1/2 세트")).toBeVisible();
+  await expect(page.getByText("1 reps")).toBeVisible();
+
+  await page.getByRole("button", { name: "수동 +1" }).click();
+  await expect(page.getByText("휴식 중")).toBeVisible();
+  await expect(page.getByText("다음 2/2 세트")).toBeVisible();
+  await expect(page.getByText("1:00")).toBeVisible();
+
+  await page.getByRole("button", { name: "다음 세트" }).click();
+  await expect(page.getByText("2/2 세트")).toBeVisible();
 });
