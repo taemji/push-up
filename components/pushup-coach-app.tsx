@@ -272,7 +272,9 @@ export function PushupCoachApp() {
         body: JSON.stringify({
           userId: selectedUserId,
           workoutDate: todayIsoDate,
-          goal: workoutGoal,
+          setCount: workoutSetCount,
+          repsPerSet: workoutRepsPerSet,
+          restSeconds: workoutRestSeconds,
           count,
           elapsedSeconds,
         }),
@@ -290,7 +292,17 @@ export function PushupCoachApp() {
     } catch {
       setSaveStatus("error");
     }
-  }, [count, elapsedSeconds, loadUserTotals, loadWorkoutSummary, selectedUserId, todayIsoDate, workoutGoal]);
+  }, [
+    count,
+    elapsedSeconds,
+    loadUserTotals,
+    loadWorkoutSummary,
+    selectedUserId,
+    todayIsoDate,
+    workoutRepsPerSet,
+    workoutRestSeconds,
+    workoutSetCount,
+  ]);
 
   useEffect(() => {
     void loadUserTotals();

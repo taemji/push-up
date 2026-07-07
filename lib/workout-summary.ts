@@ -1,7 +1,9 @@
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 interface WorkoutCompletionRecord {
-  goal: number;
+  setCount?: number;
+  repsPerSet?: number;
+  restSeconds?: number;
   count: number;
   elapsedSeconds: number;
   completedAt: string;
