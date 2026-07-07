@@ -106,11 +106,17 @@ export async function generateShareImage(props: ShareImageProps): Promise<Blob> 
   ctx.font = font(900, 58);
   ctx.fillText("P", 122, 173);
 
-  const today = new Date().toLocaleDateString("ko-KR", {
+  const now = new Date();
+  const today = now.toLocaleDateString("ko-KR", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).replace(/\. /g, ".").replace(/\.$/, "");
+  const currentTime = now.toLocaleTimeString("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 
   ctx.textAlign = "right";
   ctx.fillStyle = mutedWhite;
@@ -119,6 +125,8 @@ export async function generateShareImage(props: ShareImageProps): Promise<Blob> 
   ctx.fillStyle = white;
   ctx.font = font(700, 52);
   ctx.fillText(today, 1830, 230);
+  ctx.font = font(700, 52);
+  ctx.fillText(currentTime, 1830, 292);
 
   ctx.textAlign = "left";
   ctx.fillStyle = white;
