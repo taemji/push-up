@@ -6,12 +6,12 @@ test("home page loads", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Push-up Coach" })).toBeVisible();
   await expect(page.getByText("오늘 루틴을 설정해요")).toBeVisible();
   await expect(page.getByLabel("세트 수")).toHaveValue("3");
-  await expect(page.getByLabel("세트당 개수")).toHaveValue("10");
+  await expect(page.getByLabel("세트당 개수")).toHaveValue("15");
   await expect(page.getByLabel("휴식 시간(초)")).toHaveValue("60");
   await expect(page.getByLabel("휴식 시간(초)")).toBeEnabled();
-  await expect(page.getByText("3세트 x 10개 · 휴식 60초")).toBeVisible();
+  await expect(page.getByText("3세트 x 15개 · 휴식 60초")).toBeVisible();
   await expect(page.getByRole("button", { name: /시작하기/ })).toBeVisible();
-  await expect(page.getByText("30")).toBeVisible();
+  await expect(page.getByText("45회")).toBeVisible();
 });
 
 test("page shows the cumulative chart between the calendar and start button", async ({ page }) => {
@@ -31,7 +31,7 @@ test("page shows the cumulative chart between the calendar and start button", as
 test("start flow shows countdown before workout", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /시작하기/ }).click();
-  await expect(page.getByText("자세를 잡아주세요")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "자세를 잡아주세요" })).toBeVisible();
   await expect(page.getByText("곧 시작합니다")).toBeVisible();
   await expect(page.getByRole("button", { name: "바로 시작" })).toBeVisible();
 });
@@ -55,4 +55,15 @@ test("configured set plan drives workout and rest screen", async ({ page }) => {
 
   await page.getByRole("button", { name: "다음 세트" }).click();
   await expect(page.getByText("2/2 세트")).toBeVisible();
+});
+
+test("active workout matches the squat screen layout", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /시작하기/ }).click();
+  await page.getByRole("button", { name: "바로 시작" }).click();
+
+  await expect(page.getByText("푸시업 수행")).toBeVisible();
+  await expect(page.getByRole("button", { name: /카메라/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "수동 +1" })).toBeVisible();
+  await expect(page.getByLabel("푸시업 카메라 미리보기")).toHaveCount(0);
 });

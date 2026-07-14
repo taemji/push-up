@@ -157,10 +157,10 @@ export function PushupCoachApp() {
   const [userTotalsStatus, setUserTotalsStatus] = useState<UserTotalsStatus>("idle");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [setCountInput, setSetCountInput] = useState("3");
-  const [repsPerSetInput, setRepsPerSetInput] = useState("10");
+  const [repsPerSetInput, setRepsPerSetInput] = useState("15");
   const [restSecondsInput, setRestSecondsInput] = useState("60");
   const [workoutSetCount, setWorkoutSetCount] = useState(3);
-  const [workoutRepsPerSet, setWorkoutRepsPerSet] = useState(10);
+  const [workoutRepsPerSet, setWorkoutRepsPerSet] = useState(15);
   const [workoutRestSeconds, setWorkoutRestSeconds] = useState(0);
   const [currentSet, setCurrentSet] = useState(1);
   const [setRepCount, setSetRepCount] = useState(0);
@@ -173,11 +173,11 @@ export function PushupCoachApp() {
   const [faceScale, setFaceScale] = useState(1);
   const [countdownValue, setCountdownValue] = useState<3 | 2 | 1 | 0>(3);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const activeGoalRef = useRef(30);
+  const activeGoalRef = useRef(45);
   const phaseRef = useRef<WorkoutPhase>("setup");
   const countRef = useRef(0);
   const workoutSetCountRef = useRef(3);
-  const workoutRepsPerSetRef = useRef(10);
+  const workoutRepsPerSetRef = useRef(15);
   const workoutRestSecondsRef = useRef(0);
   const currentSetRef = useRef(1);
   const setRepCountRef = useRef(0);
@@ -991,30 +991,39 @@ export function PushupCoachApp() {
                     <p className="text-2xl font-semibold leading-none text-[var(--coach-ink)]">푸시업 수행</p>
                     <p className="text-sm font-medium text-muted-foreground">{currentSet}/{workoutSetCount} 세트</p>
                   </div>
-                  <Badge variant="secondary" className="h-8! min-w-14 rounded-full! px-3! text-sm! leading-none">
-                    {elapsedTimeText}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className={`rounded-full ${cameraStatus === "watching" ? "border-emerald-500 text-emerald-700 shadow-[0_0_0_3px_rgba(16,185,129,0.16)] motion-safe:animate-pulse" : "border-destructive/60 text-destructive"}`}
+                      onClick={connectCamera}
+                      disabled={cameraStatus === "watching" || cameraStatus === "loading" || count >= workoutGoal || setRepCount >= workoutRepsPerSet}
+                      aria-label={cameraStatus === "watching" ? "카메라 연결됨" : cameraStatus === "loading" ? "카메라 준비 중" : cameraStatus === "blocked" ? "카메라 권한 필요" : cameraStatus === "unsupported" ? "카메라 미지원" : "카메라 켜기"}
+                      aria-pressed={cameraStatus === "watching"}
+                    >
+                      <ActivityIcon aria-hidden="true" />
+                    </Button>
+                    <Badge variant="secondary" className="h-8! min-w-14 rounded-full! px-3! text-sm! leading-none">
+                      {elapsedTimeText}
+                    </Badge>
+                  </div>
                 </div>
 
                 <div className="flex flex-1 flex-col items-center justify-center gap-7">
-                  <div className="relative aspect-[4/3] w-full overflow-hidden rounded-3xl border border-[var(--coach-line)] bg-[var(--coach-surface)]">
+                  <div className="sr-only" aria-live="polite">
                     <video
                       ref={videoRef}
-                      className="size-full scale-x-[-1] object-cover"
+                      className="size-px"
                       muted
                       playsInline
-                      aria-label="푸시업 카메라 미리보기"
+                      aria-hidden="true"
                     />
-                    <div className="absolute inset-x-4 bottom-4 flex items-center justify-between rounded-full bg-black/35 px-4 py-2 text-xs font-medium text-white backdrop-blur">
-                      <span>
-                        {cameraStatus === "watching" && (motionStage === "bottom" ? "가까워짐" : motionStage === "rising" ? "올라오는 중" : "대기")}
-                        {cameraStatus === "loading" && "카메라 준비 중"}
-                        {cameraStatus === "blocked" && "카메라 권한 필요"}
-                        {cameraStatus === "unsupported" && "카메라 미지원"}
-                        {cameraStatus === "idle" && "카메라 대기"}
-                      </span>
-                      <span>{faceScale.toFixed(2)}x</span>
-                    </div>
+                    {cameraStatus === "watching" && (motionStage === "bottom" ? "가까워짐" : motionStage === "rising" ? "올라오는 중" : `카메라 연결됨 ${faceScale.toFixed(2)}배`)}
+                    {cameraStatus === "loading" && "카메라 준비 중"}
+                    {cameraStatus === "blocked" && "카메라 권한 필요"}
+                    {cameraStatus === "unsupported" && "카메라 미지원"}
+                    {cameraStatus === "idle" && "카메라 대기"}
                   </div>
 
                   <div
@@ -1050,11 +1059,7 @@ export function PushupCoachApp() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <Button type="button" variant="outline" className="rounded-full" onClick={connectCamera} disabled={cameraStatus === "watching" || cameraStatus === "loading" || count >= workoutGoal || setRepCount >= workoutRepsPerSet}>
-                    <ActivityIcon data-icon="inline-start" />
-                    카메라
-                  </Button>
+                <div className="grid grid-cols-3 gap-3">
                   <Button type="button" className="rounded-full" onClick={() => addPushup()} disabled={count >= workoutGoal || setRepCount >= workoutRepsPerSet}>
                     수동 +1
                   </Button>
