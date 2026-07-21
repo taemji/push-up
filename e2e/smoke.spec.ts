@@ -57,6 +57,21 @@ test("configured set plan drives workout and rest screen", async ({ page }) => {
   await expect(page.getByText("2/2 세트")).toBeVisible();
 });
 
+test("manual set button completes all remaining reps at once", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("세트 수").fill("2");
+  await page.getByLabel("세트당 개수").fill("5");
+
+  await page.getByRole("button", { name: /시작하기/ }).click();
+  await page.getByRole("button", { name: "바로 시작" }).click();
+  await page.getByRole("button", { name: "수동 +1" }).click();
+  await expect(page.getByText("1/5")).toBeVisible();
+
+  await page.getByRole("button", { name: "현재 세트 완료" }).click();
+  await expect(page.getByText("휴식 중")).toBeVisible();
+  await expect(page.getByText("완료 5/10개 · 50%")).toBeVisible();
+});
+
 test("active workout matches the squat screen layout", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /시작하기/ }).click();
@@ -65,5 +80,41 @@ test("active workout matches the squat screen layout", async ({ page }) => {
   await expect(page.getByText("푸시업 수행")).toBeVisible();
   await expect(page.getByRole("button", { name: /카메라/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "수동 +1" })).toBeVisible();
-  await expect(page.getByLabel("푸시업 카메라 미리보기")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "현재 세트 완료" })).toBeVisible();
+  await expect(page.getByLabel("푸시업 카메라 미리보기")).toBeVisible();
+  await expect(page.getByText(/카메라|얼굴/).last()).toBeVisible();
+});
+
+test("camera permission starts a visible preview", async ({ page }) => {
+  await page.route("**/api/workouts/**", (route) => route.fulfill({ status: 503 }));
+  await page.addInitScript(() => {
+    const stream = { getTracks: () => [] } as unknown as MediaStream;
+
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      configurable: true,
+      value: async () => stream,
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "srcObject", {
+      configurable: true,
+      get() {
+        return (this as HTMLMediaElement & { __stream?: MediaStream }).__stream ?? null;
+      },
+      set(value: MediaStream | null) {
+        (this as HTMLMediaElement & { __stream?: MediaStream | null }).__stream = value;
+      },
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "play", {
+      configurable: true,
+      value: async () => undefined,
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /시작하기/ }).click();
+  await expect(page.getByRole("heading", { name: "자세를 잡아주세요" })).toBeVisible();
+  await page.getByRole("button", { name: "바로 시작" }).click();
+
+  const preview = page.getByLabel("푸시업 카메라 미리보기");
+  await expect(preview).toBeVisible();
+  await expect.poll(() => preview.evaluate((video) => Boolean((video as HTMLVideoElement).srcObject))).toBe(true);
 });

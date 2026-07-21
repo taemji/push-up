@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FaceDetector, FilesetResolver, type FaceDetectorResult } from "@mediapipe/tasks-vision";
 import {
   ActivityIcon,
   CalendarCheckIcon,
@@ -21,7 +22,7 @@ import { generateShareImage } from "@/lib/share-image";
 import { getLocalIsoDate, getMonthCalendarDays } from "@/lib/workout-summary";
 
 type WorkoutPhase = "setup" | "countdown" | "active" | "rest" | "complete";
-type CameraStatus = "idle" | "loading" | "watching" | "unsupported" | "blocked";
+type CameraStatus = "idle" | "requesting" | "loading-model" | "watching" | "no-face" | "unsupported" | "blocked" | "error";
 type SummaryStatus = "idle" | "loading" | "ready" | "error";
 type UserTotalsStatus = "idle" | "loading" | "ready" | "error";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -40,39 +41,9 @@ interface UserTotalSummary {
   totalReps: number;
 }
 
-interface MediaPipeDetection {
-  boundingBox?: {
-    width: number;
-    height: number;
-  };
-}
-
-interface MediaPipeFaceDetectorResult {
-  detections: MediaPipeDetection[];
-}
-
-interface MediaPipeFaceDetector {
-  close: () => void;
-  detectForVideo: (video: HTMLVideoElement, timestampMs: number) => MediaPipeFaceDetectorResult;
-}
-
-interface MediaPipeVisionModule {
-  FaceDetector: {
-    createFromOptions: (fileset: unknown, options: Record<string, unknown>) => Promise<MediaPipeFaceDetector>;
-  };
-  FilesetResolver: {
-    forVisionTasks: (wasmPath: string) => Promise<unknown>;
-  };
-}
-
-const mediaPipeVersion = "0.10.22";
-const mediaPipeCdnBase = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${mediaPipeVersion}`;
-
-async function loadMediaPipeVision() {
-  const importFromUrl = new Function("url", "return import(url)") as (url: string) => Promise<MediaPipeVisionModule>;
-
-  return importFromUrl(`${mediaPipeCdnBase}/vision_bundle.mjs`);
-}
+const mediaPipeWasmPath = "/mediapipe/wasm";
+const faceDetectorModelPath = "/blaze_face_short_range.tflite";
+const noFaceWarningDelayMs = 1500;
 
 const pushupUserStorageKey = "pushupUserId";
 const maxWorkoutSets = 20;
@@ -169,6 +140,7 @@ export function PushupCoachApp() {
   const [phase, setPhase] = useState<WorkoutPhase>("setup");
   const [, setLastMove] = useState<"ready" | "pushup" | "cheer">("ready");
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
+  const [cameraErrorMessage, setCameraErrorMessage] = useState("");
   const [motionStage, setMotionStage] = useState<MotionStage>("steady");
   const [faceScale, setFaceScale] = useState(1);
   const [countdownValue, setCountdownValue] = useState<3 | 2 | 1 | 0>(3);
@@ -185,8 +157,11 @@ export function PushupCoachApp() {
   const motionProfileRef = useRef<PushupMotionProfile>(createPushupMotionProfile());
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const detectorRef = useRef<MediaPipeFaceDetector | null>(null);
+  const detectorRef = useRef<FaceDetector | null>(null);
+  const detectorPromiseRef = useRef<Promise<FaceDetector> | null>(null);
   const cameraFrameRef = useRef<number | null>(null);
+  const lastVideoTimeRef = useRef(-1);
+  const lastFaceDetectedAtRef = useRef(0);
   const workoutStartedAtRef = useRef<number | null>(null);
   const lastSavedCompletionRef = useRef<string | null>(null);
 
@@ -219,6 +194,25 @@ export function PushupCoachApp() {
   const workoutPlanText = isGoalValid
     ? `${normalizedSetCount}세트 x ${normalizedRepsPerSet}개 · ${restTimeText}`
     : "입력을 확인해 주세요";
+  const cameraStatusText = cameraStatus === "watching"
+    ? motionStage === "bottom"
+      ? "가까워짐 · 내려간 자세"
+      : motionStage === "rising"
+        ? "멀어지는 중 · 올라오는 자세"
+        : `얼굴 인식 중 · ${faceScale.toFixed(2)}배`
+    : cameraStatus === "no-face"
+      ? "얼굴이 안 보여요 · 폰을 바닥에 두고 얼굴을 화면 안에 맞춰 주세요"
+      : cameraStatus === "requesting"
+        ? "카메라 권한 확인 중"
+        : cameraStatus === "loading-model"
+          ? "얼굴 판정 준비 중"
+          : cameraStatus === "blocked"
+            ? "카메라 권한이 필요해요"
+            : cameraStatus === "unsupported"
+              ? "이 브라우저는 카메라를 지원하지 않아요"
+              : cameraStatus === "error"
+                ? cameraErrorMessage
+                : "카메라 연결 대기";
   const resultText = useMemo(
     () => `오늘 푸시업 ${count}개 완료! 목표 ${workoutGoal}개 중 ${progress}% 달성했어요. 운동 시간 ${elapsedTimeText}.`,
     [count, elapsedTimeText, progress, workoutGoal]
@@ -365,7 +359,7 @@ export function PushupCoachApp() {
     void saveWorkoutCompletion();
   }, [count, elapsedSeconds, phase, saveWorkoutCompletion, selectedUserId, todayIsoDate, workoutGoal]);
 
-  const addPushup = useCallback((source: "manual" | "sensor" = "manual") => {
+  const addPushup = useCallback((source: "manual" | "sensor" = "manual", amount = 1) => {
     if (phaseRef.current !== "active") {
       return;
     }
@@ -382,8 +376,9 @@ export function PushupCoachApp() {
       return;
     }
 
-    const nextCount = Math.min(currentCount + 1, currentGoal);
-    const nextSetRepCount = Math.min(currentSetReps + 1, repsPerSet);
+    const safeAmount = Math.max(1, Math.floor(amount));
+    const nextCount = Math.min(currentCount + safeAmount, currentGoal);
+    const nextSetRepCount = Math.min(currentSetReps + safeAmount, repsPerSet);
 
     countRef.current = nextCount;
     setRepCountRef.current = nextSetRepCount;
@@ -436,6 +431,20 @@ export function PushupCoachApp() {
     }
   }, []);
 
+  const completeCurrentSet = useCallback(() => {
+    if (phaseRef.current !== "active") {
+      return;
+    }
+
+    const remainingReps = workoutRepsPerSetRef.current - setRepCountRef.current;
+
+    if (remainingReps <= 0) {
+      return;
+    }
+
+    addPushup("manual", remainingReps);
+  }, [addPushup]);
+
   const stopCamera = useCallback(() => {
     if (cameraFrameRef.current !== null) {
       window.cancelAnimationFrame(cameraFrameRef.current);
@@ -444,15 +453,43 @@ export function PushupCoachApp() {
 
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-    detectorRef.current?.close();
-    detectorRef.current = null;
+    lastVideoTimeRef.current = -1;
+    lastFaceDetectedAtRef.current = 0;
 
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
   }, []);
 
-  const estimateFaceArea = useCallback(async () => {
+  const getFaceDetector = useCallback(async () => {
+    if (detectorRef.current) {
+      return detectorRef.current;
+    }
+
+    if (!detectorPromiseRef.current) {
+      setCameraStatus("loading-model");
+      detectorPromiseRef.current = FilesetResolver.forVisionTasks(mediaPipeWasmPath)
+        .then((fileset) => FaceDetector.createFromOptions(fileset, {
+          baseOptions: {
+            delegate: "CPU",
+            modelAssetPath: faceDetectorModelPath,
+          },
+          minDetectionConfidence: 0.5,
+          runningMode: "VIDEO",
+        }))
+        .then((detector) => {
+          detectorRef.current = detector;
+          return detector;
+        })
+        .finally(() => {
+          detectorPromiseRef.current = null;
+        });
+    }
+
+    return detectorPromiseRef.current;
+  }, []);
+
+  const estimateFaceArea = useCallback(() => {
     const video = videoRef.current;
     const detector = detectorRef.current;
 
@@ -462,10 +499,19 @@ export function PushupCoachApp() {
     }
 
     try {
-      const result = detector.detectForVideo(video, performance.now());
-      const face = result.detections[0];
+      const now = performance.now();
+      let result: FaceDetectorResult | null = null;
+
+      if (video.currentTime !== lastVideoTimeRef.current) {
+        lastVideoTimeRef.current = video.currentTime;
+        result = detector.detectForVideo(video, now);
+      }
+
+      const face = result?.detections[0];
 
       if (face?.boundingBox) {
+        lastFaceDetectedAtRef.current = now;
+        setCameraStatus("watching");
         const faceArea = face.boundingBox.width * face.boundingBox.height;
         const nextMotion = evaluatePushupMotion(motionStateRef.current, faceArea, motionProfileRef.current);
 
@@ -481,9 +527,13 @@ export function PushupCoachApp() {
         if (nextMotion.completedRep) {
           addPushup("sensor");
         }
+      } else if (now - lastFaceDetectedAtRef.current >= noFaceWarningDelayMs) {
+        setCameraStatus("no-face");
       }
-    } catch {
-      setCameraStatus("blocked");
+    } catch (error) {
+      console.error("Face detection failed:", error);
+      setCameraErrorMessage("얼굴 판정을 시작하지 못했어요. 카메라를 다시 연결해 주세요.");
+      setCameraStatus("error");
       stopCamera();
       return;
     }
@@ -495,7 +545,11 @@ export function PushupCoachApp() {
     const stream = streamRef.current;
     const video = videoRef.current;
 
-    if (!stream || !video) {
+    if (!stream) {
+      return;
+    }
+
+    if (!video) {
       return;
     }
 
@@ -503,44 +557,43 @@ export function PushupCoachApp() {
       video.srcObject = stream;
       await video.play();
 
-      if (!detectorRef.current) {
-        const vision = await loadMediaPipeVision();
-        const fileset = await vision.FilesetResolver.forVisionTasks(`${mediaPipeCdnBase}/wasm`);
+      await getFaceDetector();
 
-        detectorRef.current = await vision.FaceDetector.createFromOptions(fileset, {
-          baseOptions: {
-            delegate: "GPU",
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
-          },
-          minDetectionConfidence: 0.5,
-          runningMode: "VIDEO",
-        });
+      if (streamRef.current !== stream || videoRef.current !== video) {
+        return;
       }
 
       setCameraStatus("watching");
+      setCameraErrorMessage("");
       motionStateRef.current = "top";
       motionProfileRef.current = createPushupMotionProfile();
       setFaceScale(1);
       setMotionStage("steady");
+      lastVideoTimeRef.current = -1;
+      lastFaceDetectedAtRef.current = performance.now();
 
       if (cameraFrameRef.current !== null) {
         window.cancelAnimationFrame(cameraFrameRef.current);
       }
 
       cameraFrameRef.current = window.requestAnimationFrame(() => void estimateFaceArea());
-    } catch {
-      setCameraStatus("blocked");
+    } catch (error) {
+      console.error("Camera tracking failed:", error);
+      setCameraErrorMessage("카메라는 열렸지만 얼굴 판정 모델을 준비하지 못했어요.");
+      setCameraStatus("error");
       stopCamera();
     }
-  }, [estimateFaceArea, stopCamera]);
+  }, [estimateFaceArea, getFaceDetector, stopCamera]);
 
   const connectCamera = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraStatus("unsupported");
+      setCameraErrorMessage("이 브라우저에서는 카메라를 사용할 수 없어요.");
       return;
     }
 
-    setCameraStatus("loading");
+    setCameraStatus("requesting");
+    setCameraErrorMessage("");
 
     try {
       const stream = streamRef.current ?? await navigator.mediaDevices.getUserMedia({
@@ -552,9 +605,16 @@ export function PushupCoachApp() {
         audio: false,
       });
 
+      if (phaseRef.current !== "countdown" && phaseRef.current !== "active") {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       streamRef.current = stream;
       await startCameraTracking();
-    } catch {
+    } catch (error) {
+      console.error("Camera permission failed:", error);
+      setCameraErrorMessage("브라우저 사이트 설정에서 카메라 권한을 허용한 뒤 다시 눌러 주세요.");
       setCameraStatus("blocked");
       stopCamera();
     }
@@ -564,8 +624,6 @@ export function PushupCoachApp() {
     if (!isGoalValid) {
       return;
     }
-
-    await connectCamera();
 
     const nextGoal = normalizedGoal;
     const nextSetCount = normalizedSetCount;
@@ -598,15 +656,21 @@ export function PushupCoachApp() {
     workoutStartedAtRef.current = null;
     setCountdownValue(3);
     setElapsedSeconds(0);
+    void connectCamera();
   }, [connectCamera, hasRestBetweenSets, isGoalValid, normalizedGoal, normalizedRepsPerSet, normalizedRestSeconds, normalizedSetCount]);
 
   useEffect(() => {
-    if (phase !== "active" || cameraStatus === "watching") {
-      return;
+    if (phase === "active" && streamRef.current) {
+      void startCameraTracking();
     }
+  }, [phase, startCameraTracking]);
 
-    void startCameraTracking();
-  }, [cameraStatus, phase, startCameraTracking]);
+  useEffect(() => {
+    if (phase === "setup" || phase === "rest" || phase === "complete") {
+      stopCamera();
+      setCameraStatus("idle");
+    }
+  }, [phase, stopCamera]);
 
   useEffect(() => {
     if (phase !== "countdown") {
@@ -697,6 +761,8 @@ export function PushupCoachApp() {
   useEffect(() => {
     return () => {
       stopCamera();
+      detectorRef.current?.close();
+      detectorRef.current = null;
     };
   }, [stopCamera]);
 
@@ -965,7 +1031,7 @@ export function PushupCoachApp() {
 
                   <div className="flex flex-col items-center gap-3">
                     <p className="text-sm font-medium text-[var(--coach-ink)]">곧 시작합니다</p>
-                    <p className="max-w-xs text-sm text-muted-foreground">폰을 상체에 단단히 고정하고 플랭크 자세를 잡아주세요.</p>
+                    <p className="max-w-xs text-sm text-muted-foreground">폰을 바닥에 세워 얼굴이 화면에 보이게 두고 플랭크 자세를 잡아주세요.</p>
                   </div>
                 </div>
 
@@ -996,11 +1062,11 @@ export function PushupCoachApp() {
                       type="button"
                       variant="outline"
                       size="icon"
-                      className={`rounded-full ${cameraStatus === "watching" ? "border-emerald-500 text-emerald-700 shadow-[0_0_0_3px_rgba(16,185,129,0.16)] motion-safe:animate-pulse" : "border-destructive/60 text-destructive"}`}
+                      className={`rounded-full ${cameraStatus === "watching" ? "border-emerald-500 text-emerald-700 shadow-[0_0_0_3px_rgba(16,185,129,0.16)] motion-safe:animate-pulse" : cameraStatus === "requesting" || cameraStatus === "loading-model" ? "border-amber-500 text-amber-700" : "border-destructive/60 text-destructive"}`}
                       onClick={connectCamera}
-                      disabled={cameraStatus === "watching" || cameraStatus === "loading" || count >= workoutGoal || setRepCount >= workoutRepsPerSet}
-                      aria-label={cameraStatus === "watching" ? "카메라 연결됨" : cameraStatus === "loading" ? "카메라 준비 중" : cameraStatus === "blocked" ? "카메라 권한 필요" : cameraStatus === "unsupported" ? "카메라 미지원" : "카메라 켜기"}
-                      aria-pressed={cameraStatus === "watching"}
+                      disabled={cameraStatus === "watching" || cameraStatus === "no-face" || cameraStatus === "requesting" || cameraStatus === "loading-model" || count >= workoutGoal || setRepCount >= workoutRepsPerSet}
+                      aria-label={cameraStatus === "watching" || cameraStatus === "no-face" ? "카메라 연결됨" : cameraStatus === "requesting" || cameraStatus === "loading-model" ? "카메라 준비 중" : cameraStatus === "blocked" ? "카메라 권한 필요" : cameraStatus === "unsupported" ? "카메라 미지원" : "카메라 다시 연결"}
+                      aria-pressed={cameraStatus === "watching" || cameraStatus === "no-face"}
                     >
                       <ActivityIcon aria-hidden="true" />
                     </Button>
@@ -1011,19 +1077,18 @@ export function PushupCoachApp() {
                 </div>
 
                 <div className="flex flex-1 flex-col items-center justify-center gap-7">
-                  <div className="sr-only" aria-live="polite">
+                  <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-[var(--coach-line)] bg-[var(--coach-surface)]">
                     <video
                       ref={videoRef}
-                      className="size-px"
+                      className="size-full scale-x-[-1] object-cover"
                       muted
                       playsInline
-                      aria-hidden="true"
+                      autoPlay
+                      aria-label="푸시업 카메라 미리보기"
                     />
-                    {cameraStatus === "watching" && (motionStage === "bottom" ? "가까워짐" : motionStage === "rising" ? "올라오는 중" : `카메라 연결됨 ${faceScale.toFixed(2)}배`)}
-                    {cameraStatus === "loading" && "카메라 준비 중"}
-                    {cameraStatus === "blocked" && "카메라 권한 필요"}
-                    {cameraStatus === "unsupported" && "카메라 미지원"}
-                    {cameraStatus === "idle" && "카메라 대기"}
+                    <div className="absolute inset-x-3 bottom-3 rounded-xl bg-black/55 px-4 py-2 text-center text-xs font-medium text-white backdrop-blur" aria-live="polite">
+                      {cameraStatusText}
+                    </div>
                   </div>
 
                   <div
@@ -1059,9 +1124,12 @@ export function PushupCoachApp() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <Button type="button" className="rounded-full" onClick={() => addPushup()} disabled={count >= workoutGoal || setRepCount >= workoutRepsPerSet}>
                     수동 +1
+                  </Button>
+                  <Button type="button" variant="secondary" className="rounded-full" onClick={completeCurrentSet} disabled={count >= workoutGoal || setRepCount >= workoutRepsPerSet}>
+                    현재 세트 완료
                   </Button>
                   <Button
                     type="button"
