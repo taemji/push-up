@@ -159,6 +159,7 @@ export function PushupCoachApp() {
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<FaceDetector | null>(null);
   const detectorPromiseRef = useRef<Promise<FaceDetector> | null>(null);
+  const cameraConnectionPendingRef = useRef(false);
   const cameraFrameRef = useRef<number | null>(null);
   const lastVideoTimeRef = useRef(-1);
   const lastFaceDetectedAtRef = useRef(0);
@@ -592,6 +593,11 @@ export function PushupCoachApp() {
       return;
     }
 
+    if (cameraConnectionPendingRef.current) {
+      return;
+    }
+
+    cameraConnectionPendingRef.current = true;
     setCameraStatus("requesting");
     setCameraErrorMessage("");
 
@@ -617,6 +623,8 @@ export function PushupCoachApp() {
       setCameraErrorMessage("브라우저 사이트 설정에서 카메라 권한을 허용한 뒤 다시 눌러 주세요.");
       setCameraStatus("blocked");
       stopCamera();
+    } finally {
+      cameraConnectionPendingRef.current = false;
     }
   }, [startCameraTracking, stopCamera]);
 
@@ -660,10 +668,10 @@ export function PushupCoachApp() {
   }, [connectCamera, hasRestBetweenSets, isGoalValid, normalizedGoal, normalizedRepsPerSet, normalizedRestSeconds, normalizedSetCount]);
 
   useEffect(() => {
-    if (phase === "active" && streamRef.current) {
-      void startCameraTracking();
+    if (phase === "active") {
+      void connectCamera();
     }
-  }, [phase, startCameraTracking]);
+  }, [connectCamera, phase]);
 
   useEffect(() => {
     if (phase === "setup" || phase === "rest" || phase === "complete") {
@@ -1080,11 +1088,15 @@ export function PushupCoachApp() {
                   <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-[var(--coach-line)] bg-[var(--coach-surface)]">
                     <video
                       ref={videoRef}
-                      className="size-full scale-x-[-1] object-cover"
+                      className="size-full scale-x-[-1] object-cover brightness-[0.58] saturate-[0.7] contrast-[0.9]"
                       muted
                       playsInline
                       autoPlay
                       aria-label="푸시업 카메라 미리보기"
+                    />
+                    <div
+                      className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_15%,rgba(0,0,0,0.12)_62%,rgba(0,0,0,0.32)_100%)]"
+                      aria-hidden="true"
                     />
                     <div className="absolute inset-x-3 bottom-3 rounded-xl bg-black/55 px-4 py-2 text-center text-xs font-medium text-white backdrop-blur" aria-live="polite">
                       {cameraStatusText}
